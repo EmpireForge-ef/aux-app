@@ -76,29 +76,59 @@ never asks you to re-authorize to fix one.
 
 Configuration is read from flags, `AUX_`-prefixed environment variables, and
 an optional `aux.yaml` file (working directory or `/etc/aux`), in that order
-of precedence.
+of precedence. Each setting lists its environment variable, the equivalent
+`aux.yaml` key, and its default.
 
-| Key (yaml) | Env var | Default | Description |
-|---|---|---|---|
-| `addr` | `AUX_ADDR` | `:8080` | Listen address |
-| `static_dir` | `AUX_STATIC_DIR` | `frontend/dist` | Built frontend directory |
-| `public_url` | `AUX_PUBLIC_URL` | `http://127.0.0.1:8080` | Public base URL; the OAuth redirect URL is derived from it (HTTPS required except on explicit loopback IPs) |
-| `token_file` | `AUX_TOKEN_FILE` | `spotify-token.json` | Where the Spotify OAuth token is persisted |
-| `spotify.client_id` | `AUX_SPOTIFY_CLIENT_ID` | — | Spotify app client ID |
-| `spotify.client_secret` | `AUX_SPOTIFY_CLIENT_SECRET` | — | Spotify app client secret |
-| `spotify.redirect_url` | `AUX_SPOTIFY_REDIRECT_URL` | `<public_url>/api/auth/callback` | Override the derived redirect URL |
-| `anthropic.api_key` | `AUX_ANTHROPIC_API_KEY` | `$ANTHROPIC_API_KEY` | Anthropic API key |
-| `anthropic.model` | `AUX_ANTHROPIC_MODEL` | `claude-opus-4-8` | Model used for the agent (also settable in the admin UI) |
-| `anthropic.max_tokens` | `AUX_ANTHROPIC_MAX_TOKENS` | `8192` | Max output tokens per model turn (also settable in the admin UI) |
-| `admin.password` | `AUX_ADMIN_PASSWORD` | — | Admin password gating the whole app; empty (and no OIDC) disables auth (dev only) |
-| `settings_file` | `AUX_SETTINGS_FILE` | `aux-settings.json` | Where credentials set via the admin UI are persisted (0600) |
-| `chats_dir` | `AUX_CHATS_DIR` | `chats` | Directory where conversations are persisted (one JSON file per chat) |
-| `oidc.issuer_url` | `AUX_OIDC_ISSUER_URL` | — | OpenID Connect issuer URL; set (with client ID) to enable SSO |
-| `oidc.client_id` | `AUX_OIDC_CLIENT_ID` | — | OIDC client ID |
-| `oidc.client_secret` | `AUX_OIDC_CLIENT_SECRET` | — | OIDC client secret |
-| `oidc.redirect_url` | `AUX_OIDC_REDIRECT_URL` | `<public_url>/api/admin/oidc/callback` | Override the derived OIDC redirect URL |
-| `oidc.scopes` | `AUX_OIDC_SCOPES` | `openid profile email` | Space-separated OIDC scopes |
-| `oidc.allowed_emails` | `AUX_OIDC_ALLOWED_EMAILS` | — | Comma-separated allowlist of verified emails (empty = any authenticated user) |
+**Server**
+
+- **`AUX_ADDR`** (`addr`, default `:8080`) — listen address.
+- **`AUX_PUBLIC_URL`** (`public_url`, default `http://127.0.0.1:8080`) —
+  public base URL; the Spotify and OIDC redirect URLs are derived from it.
+  HTTPS is required except on the loopback IPs (`127.0.0.1` / `[::1]`).
+- **`AUX_STATIC_DIR`** (`static_dir`, default `frontend/dist`) — directory of
+  the built frontend to serve.
+
+**Spotify**
+
+- **`AUX_SPOTIFY_CLIENT_ID`** (`spotify.client_id`) — Spotify app client ID.
+- **`AUX_SPOTIFY_CLIENT_SECRET`** (`spotify.client_secret`) — Spotify app
+  client secret.
+- **`AUX_SPOTIFY_REDIRECT_URL`** (`spotify.redirect_url`) — override the
+  redirect URL (default `<public_url>/api/auth/callback`).
+
+**Anthropic**
+
+- **`AUX_ANTHROPIC_API_KEY`** (`anthropic.api_key`, default
+  `$ANTHROPIC_API_KEY`) — Anthropic API key.
+- **`AUX_ANTHROPIC_MODEL`** (`anthropic.model`, default `claude-opus-4-8`) —
+  model used for the agent. Also settable in the admin UI.
+- **`AUX_ANTHROPIC_MAX_TOKENS`** (`anthropic.max_tokens`, default `8192`) —
+  max output tokens per model turn. Also settable in the admin UI.
+
+**Admin login**
+
+- **`AUX_ADMIN_PASSWORD`** (`admin.password`) — password gating the whole
+  app. Empty (and no OIDC) disables auth — local development only.
+- **`AUX_OIDC_ISSUER_URL`** (`oidc.issuer_url`) — OpenID Connect issuer URL;
+  set together with the client ID to enable SSO.
+- **`AUX_OIDC_CLIENT_ID`** (`oidc.client_id`) — OIDC client ID.
+- **`AUX_OIDC_CLIENT_SECRET`** (`oidc.client_secret`) — OIDC client secret.
+- **`AUX_OIDC_REDIRECT_URL`** (`oidc.redirect_url`) — override the OIDC
+  redirect URL (default `<public_url>/api/admin/oidc/callback`).
+- **`AUX_OIDC_SCOPES`** (`oidc.scopes`, default `openid profile email`) —
+  space-separated OIDC scopes.
+- **`AUX_OIDC_ALLOWED_EMAILS`** (`oidc.allowed_emails`) — comma-separated
+  allowlist of verified emails; empty means any authenticated user is allowed.
+
+**Storage** (persist these on a volume in production)
+
+- **`AUX_TOKEN_FILE`** (`token_file`, default `spotify-token.json`) — where
+  the Spotify OAuth token is persisted.
+- **`AUX_SETTINGS_FILE`** (`settings_file`, default `aux-settings.json`) —
+  where credentials and model choice set via the admin UI are persisted
+  (mode 0600).
+- **`AUX_CHATS_DIR`** (`chats_dir`, default `chats`) — directory of persisted
+  conversations (one JSON file per chat).
 
 ## Admin login & runtime settings
 

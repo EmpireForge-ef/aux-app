@@ -22,6 +22,25 @@ func deviceProp() map[string]any {
 	return str("Optional device ID to target (see get_available_devices). Defaults to the currently active device.")
 }
 
+// playbackAfter returns the playback state after a control command so the
+// model sees the effect (what's playing, on which device) without a separate
+// get_playback_state call. A short settle delay lets Spotify apply the change.
+func playbackAfter(ctx context.Context, c *spotify.Client) (any, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(250 * time.Millisecond):
+	}
+	st, err := c.GetPlaybackState(ctx)
+	if err != nil {
+		return map[string]any{"status": "ok", "note": "command sent; could not read playback state: " + err.Error()}, nil
+	}
+	if st == nil {
+		return map[string]any{"status": "ok", "note": "no active device is reporting playback"}, nil
+	}
+	return st, nil
+}
+
 func playerTools() []Tool {
 	return []Tool{
 		{
@@ -62,7 +81,7 @@ func playerTools() []Tool {
 				if err := c.TransferPlayback(ctx, args.DeviceID, args.Play); err != nil {
 					return nil, err
 				}
-				return ok(), nil
+				return playbackAfter(ctx, c)
 			},
 		},
 		{
@@ -132,7 +151,7 @@ func playerTools() []Tool {
 				if err := c.Play(ctx, play, deviceOpt(args.DeviceID)...); err != nil {
 					return nil, err
 				}
-				return ok(), nil
+				return playbackAfter(ctx, c)
 			},
 		},
 		{
@@ -149,7 +168,7 @@ func playerTools() []Tool {
 				if err := c.Pause(ctx, deviceOpt(args.DeviceID)...); err != nil {
 					return nil, err
 				}
-				return ok(), nil
+				return playbackAfter(ctx, c)
 			},
 		},
 		{
@@ -166,7 +185,7 @@ func playerTools() []Tool {
 				if err := c.SkipToNext(ctx, deviceOpt(args.DeviceID)...); err != nil {
 					return nil, err
 				}
-				return ok(), nil
+				return playbackAfter(ctx, c)
 			},
 		},
 		{
@@ -183,7 +202,7 @@ func playerTools() []Tool {
 				if err := c.SkipToPrevious(ctx, deviceOpt(args.DeviceID)...); err != nil {
 					return nil, err
 				}
-				return ok(), nil
+				return playbackAfter(ctx, c)
 			},
 		},
 		{
@@ -204,7 +223,7 @@ func playerTools() []Tool {
 				if err := c.SeekToPosition(ctx, args.PositionMS, deviceOpt(args.DeviceID)...); err != nil {
 					return nil, err
 				}
-				return ok(), nil
+				return playbackAfter(ctx, c)
 			},
 		},
 		{
@@ -327,6 +346,34 @@ func playerTools() []Tool {
 					return nil, err
 				}
 				return ok(), nil
+			},
+		},
+		{
+			Name:        "add_tracks_to_queue",
+			Description: "Append several tracks/episodes to the playback queue in order, with one call instead of many. Requires Spotify Premium. Reports how many were queued; if one fails the rest are skipped so the order stays intact.",
+			Schema: schema(map[string]any{
+				"uris":      strArray("Spotify track/episode URIs to queue, in the order they should play."),
+				"device_id": deviceProp(),
+			}, "uris"),
+			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
+				args, err := decode[struct {
+					URIs     []string `json:"uris"`
+					DeviceID string   `json:"device_id"`
+				}](input)
+				if err != nil {
+					return nil, err
+				}
+				opts := deviceOpt(args.DeviceID)
+				for i, uri := range args.URIs {
+					if err := c.AddToQueue(ctx, uri, opts...); err != nil {
+						return map[string]any{
+							"queued": i,
+							"total":  len(args.URIs),
+							"error":  "stopped at position " + uri + ": " + err.Error(),
+						}, nil
+					}
+				}
+				return map[string]any{"status": "ok", "queued": len(args.URIs)}, nil
 			},
 		},
 	}

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	spotify "github.com/EmpireForge-ef/spotify-go-wrapper"
 	"github.com/anthropics/anthropic-sdk-go"
@@ -34,6 +36,8 @@ Guidelines:
 - This app runs against Spotify's development-mode API (February 2026). Playlist contents are only readable for playlists the user owns or collaborates on — Spotify withholds the contents of other playlists, including its own editorial and algorithmic ones. Search returns at most 10 results per type per call (page with offset). Some catalog fields (track/artist popularity, user email/country) are withheld.
 - A 403 Forbidden is an app-level restriction, never a scope problem — do not advise re-authorizing to fix one.
 - Destructive actions (removing saved tracks/albums/episodes/shows/audiobooks, removing or replacing playlist items, unfollowing) are gated: the app automatically asks the user to approve each one before it runs, so you do not need to ask for confirmation in text — just call the tool and briefly state what you are doing. If the user declines, acknowledge it and move on. Non-destructive actions (adding items, creating playlists, saving) run without a prompt.
+- Spotify no longer offers a recommendations endpoint to this app, so build "vibe" or "songs like X" playlists yourself: search by genre/mood/year, draw on the user's top and saved tracks and their followed/searched artists' catalogs, then dedupe. When you recommend, briefly say why a track fits ("because you listen to X").
+- You have a small persistent memory of the user's music preferences via the remember_preference / list_preferences / forget_preference tools. When the user states a durable taste (favourite genres, artists to avoid, no explicit lyrics, preferred era), save it so future chats stay personalised. Their saved preferences are provided to you each turn — honour them unless the user overrides them for a specific request.
 - Be concise. After finishing a multi-step task, summarize what changed in one or two sentences.`
 
 // Event is one server-sent event pushed to the frontend during a chat turn.
@@ -62,6 +66,22 @@ type ConfirmRequest struct {
 // confirmation channel is available, and destructive actions are declined.
 type ConfirmFunc func(ctx context.Context, req ConfirmRequest) bool
 
+// Memory is a small persistent store of user preferences the agent can read
+// (for personalisation) and update via built-in tools.
+type Memory interface {
+	Text() string                // preferences rendered for the prompt, or ""
+	List() map[string]string     // all preferences
+	Set(key, value string) error // empty value deletes; persists
+	Clear() error                // remove everything
+}
+
+// TurnOptions carries the per-turn extras beyond the conversation itself.
+type TurnOptions struct {
+	Confirm ConfirmFunc // gate for destructive tools
+	Memory  Memory      // user preferences (nil disables the memory tools)
+	Now     time.Time   // current time for context; zero means time.Now()
+}
+
 // Agent holds the Anthropic client and the Spotify tool registry. It is
 // stateless: conversation history is passed in and returned by Chat, so the
 // caller owns persistence.
@@ -88,7 +108,75 @@ func New(apiKey, model string, maxTokens int64) *Agent {
 		model:      anthropic.Model(model),
 		maxTokens:  maxTokens,
 		tools:      byName,
-		toolParams: aitools.Params(registry),
+		toolParams: append(aitools.Params(registry), memoryToolParams...),
+	}
+}
+
+// memoryToolParams are built-in, non-Spotify tools for persisting user
+// preferences. They are handled inside the agent loop, not via the Spotify
+// tool registry.
+var memoryToolParams = []anthropic.ToolUnionParam{
+	{OfTool: &anthropic.ToolParam{
+		Name:        "remember_preference",
+		Description: anthropic.String("Save a lasting user music preference so it persists across chats (e.g. key 'genres' value 'synthwave, lo-fi'; key 'avoid' value 'explicit lyrics'; key 'era' value '80s-90s'). Use short, stable keys. Call this when the user states a durable taste, not for one-off requests."),
+		InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{
+			"key":   map[string]any{"type": "string", "description": "Short preference topic, e.g. 'genres', 'avoid', 'era', 'favorite_artists'."},
+			"value": map[string]any{"type": "string", "description": "The preference value."},
+		}, Required: []string{"key", "value"}},
+	}},
+	{OfTool: &anthropic.ToolParam{
+		Name:        "list_preferences",
+		Description: anthropic.String("List the user's saved music preferences."),
+		InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{}},
+	}},
+	{OfTool: &anthropic.ToolParam{
+		Name:        "forget_preference",
+		Description: anthropic.String("Delete a saved preference by key, or pass key '*' to clear all preferences."),
+		InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{
+			"key": map[string]any{"type": "string", "description": "The preference key to delete, or '*' to clear all."},
+		}, Required: []string{"key"}},
+	}},
+}
+
+// runMemoryTool handles the built-in preference tools; handled is false for
+// any other tool name.
+func runMemoryTool(name string, input json.RawMessage, mem Memory) (handled bool, out string, err error) {
+	switch name {
+	case "remember_preference", "list_preferences", "forget_preference":
+		handled = true
+	default:
+		return false, "", nil
+	}
+	if mem == nil {
+		return true, "", errors.New("preference memory is unavailable")
+	}
+	var args struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if len(input) > 0 {
+		_ = json.Unmarshal(input, &args)
+	}
+	switch name {
+	case "remember_preference":
+		if e := mem.Set(args.Key, args.Value); e != nil {
+			return true, "", e
+		}
+		return true, `{"status":"ok"}`, nil
+	case "forget_preference":
+		if args.Key == "*" {
+			if e := mem.Clear(); e != nil {
+				return true, "", e
+			}
+			return true, `{"status":"ok","cleared":true}`, nil
+		}
+		if e := mem.Set(args.Key, ""); e != nil {
+			return true, "", e
+		}
+		return true, `{"status":"ok"}`, nil
+	default: // list_preferences
+		data, _ := json.Marshal(mem.List())
+		return true, string(data), nil
 	}
 }
 
@@ -123,19 +211,27 @@ func (a *Agent) ListModels(ctx context.Context) ([]ModelInfo, error) {
 // caller can persist whatever the model already did. sp may be nil when the
 // user has not connected Spotify yet; tools then return an instructive error
 // to the model. Destructive tools are gated through confirm before they run.
-func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text string, sp *spotify.Client, emit func(Event), confirm ConfirmFunc) ([]anthropic.MessageParam, error) {
+func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text string, sp *spotify.Client, emit func(Event), opts TurnOptions) ([]anthropic.MessageParam, error) {
 	messages := append(history, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
+
+	// The stable system prompt stays first (cached); volatile per-turn context
+	// (current time, user preferences) goes in a second block so it doesn't
+	// invalidate the cache prefix on every message.
+	system := []anthropic.TextBlockParam{{
+		Text:         systemPrompt,
+		CacheControl: anthropic.NewCacheControlEphemeralParam(),
+	}}
+	if ctxText := turnContext(opts); ctxText != "" {
+		system = append(system, anthropic.TextBlockParam{Text: ctxText})
+	}
 
 	for turn := 0; turn < maxTurns; turn++ {
 		params := anthropic.MessageNewParams{
 			Model:     a.model,
 			MaxTokens: a.maxTokens,
-			System: []anthropic.TextBlockParam{{
-				Text:         systemPrompt,
-				CacheControl: anthropic.NewCacheControlEphemeralParam(),
-			}},
-			Messages: messages,
-			Tools:    a.toolParams,
+			System:    system,
+			Messages:  messages,
+			Tools:     a.toolParams,
 		}
 
 		stream := a.client.Messages.NewStreaming(ctx, params)
@@ -170,9 +266,20 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 			}
 			emit(Event{Type: "tool_use", Name: tu.Name, Input: tu.Input})
 
+			// Built-in preference tools are handled locally, not via Spotify.
+			if handled, out, memErr := runMemoryTool(tu.Name, tu.Input, opts.Memory); handled {
+				success := memErr == nil
+				if memErr != nil {
+					out = "Error: " + memErr.Error()
+				}
+				emit(Event{Type: "tool_result", Name: tu.Name, OK: &success, Summary: summarize(out)})
+				results = append(results, anthropic.NewToolResultBlock(tu.ID, out, !success))
+				continue
+			}
+
 			// Gate destructive tools behind user confirmation.
 			if tool, known := a.tools[tu.Name]; known && tool.Confirm != "" {
-				approved := confirm != nil && confirm(ctx, ConfirmRequest{
+				approved := opts.Confirm != nil && opts.Confirm(ctx, ConfirmRequest{
 					Name:     tu.Name,
 					Input:    tu.Input,
 					Question: tool.Confirm,
@@ -215,7 +322,7 @@ func (a *Agent) runTool(ctx context.Context, name string, input json.RawMessage,
 	if err != nil {
 		return "", err
 	}
-	data, err := json.Marshal(result)
+	data, err := json.Marshal(aitools.Slim(result))
 	if err != nil {
 		return "", fmt.Errorf("marshal tool result: %w", err)
 	}
@@ -224,6 +331,25 @@ func (a *Agent) runTool(ctx context.Context, name string, input json.RawMessage,
 		out = out[:maxToolResultChars] + `... [truncated — use limit/offset to page through smaller chunks]`
 	}
 	return out, nil
+}
+
+// turnContext builds the volatile per-turn system block: the current local
+// time and the user's saved preferences, so the model is time-aware and
+// personalises without being told each time.
+func turnContext(opts TurnOptions) string {
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Current local time: %s.", now.Format("Monday 2006-01-02 15:04"))
+	if opts.Memory != nil {
+		if prefs := opts.Memory.Text(); prefs != "" {
+			b.WriteString("\n\nThe user's saved music preferences (apply them unless they say otherwise):\n")
+			b.WriteString(prefs)
+		}
+	}
+	return b.String()
 }
 
 // summarize trims a tool result for display in the UI event feed.

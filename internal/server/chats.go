@@ -200,7 +200,10 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	messages, chatErr := agent.Chat(r.Context(), c.Messages, req.Message, sp, emit, confirm)
+	messages, chatErr := agent.Chat(r.Context(), c.Messages, req.Message, sp, emit, ai.TurnOptions{
+		Confirm: confirm,
+		Memory:  s.prefs,
+	})
 	if chatErr != nil {
 		log.Printf("chat error (chat %s): %v", req.ChatID, chatErr)
 		emit(ai.Event{Type: "error", Message: chatErr.Error()})

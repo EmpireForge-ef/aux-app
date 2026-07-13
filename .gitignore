@@ -14,6 +14,8 @@ frontend/dist/
 
 # Spotify OAuth token (secret)
 spotify-token.json
+aux-settings.json
+aux-preferences.json
 
 # Helm packaging output
 aux-*.tgz

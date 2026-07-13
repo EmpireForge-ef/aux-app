@@ -13,7 +13,12 @@ artists, and control playback.
 - **AI control of Spotify** — every working method of the wrapper (playlists,
   library, player, search, artists, albums, shows, episodes, audiobooks, …) is
   a tool the model can call; responses stream live, including tool activity.
-  Destructive actions ask for your confirmation first.
+  Tool results are slimmed to the essentials (name, artist, uri, …) to stay
+  fast and token-cheap. Destructive actions ask for your confirmation first.
+- **Personalised & context-aware** — the AI keeps a small cross-chat memory of
+  your music preferences (favourite genres, no-gos, era) and knows the current
+  time, so "a playlist like last time" or "something for a Monday morning"
+  just works.
 - **Persistent, multi-chat conversations** — a sidebar to start new chats,
   return to old ones, and rename or delete them; full context (including tool
   calls) survives restarts. Each message has a copy button.
@@ -134,6 +139,9 @@ of precedence. Each setting lists its environment variable, the equivalent
   (mode 0600).
 - **`AUX_CHATS_DIR`** (`chats_dir`, default `chats`) — directory of persisted
   conversations (one JSON file per chat).
+- **`AUX_PREFERENCES_FILE`** (`preferences_file`, default
+  `aux-preferences.json`) — where the user's saved music preferences (the AI's
+  cross-chat memory) are persisted.
 
 ## Admin login & runtime settings
 

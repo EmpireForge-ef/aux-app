@@ -57,16 +57,17 @@ func (o OIDC) Enabled() bool {
 }
 
 type Config struct {
-	Addr         string    `mapstructure:"addr"`
-	StaticDir    string    `mapstructure:"static_dir"`
-	PublicURL    string    `mapstructure:"public_url"`
-	TokenFile    string    `mapstructure:"token_file"`
-	SettingsFile string    `mapstructure:"settings_file"`
-	ChatsDir     string    `mapstructure:"chats_dir"`
-	Spotify      Spotify   `mapstructure:"spotify"`
-	Anthropic    Anthropic `mapstructure:"anthropic"`
-	Admin        Admin     `mapstructure:"admin"`
-	OIDC         OIDC      `mapstructure:"oidc"`
+	Addr            string    `mapstructure:"addr"`
+	StaticDir       string    `mapstructure:"static_dir"`
+	PublicURL       string    `mapstructure:"public_url"`
+	TokenFile       string    `mapstructure:"token_file"`
+	SettingsFile    string    `mapstructure:"settings_file"`
+	ChatsDir        string    `mapstructure:"chats_dir"`
+	PreferencesFile string    `mapstructure:"preferences_file"`
+	Spotify         Spotify   `mapstructure:"spotify"`
+	Anthropic       Anthropic `mapstructure:"anthropic"`
+	Admin           Admin     `mapstructure:"admin"`
+	OIDC            OIDC      `mapstructure:"oidc"`
 }
 
 // New builds a viper instance with defaults, env bindings, and an optional
@@ -83,6 +84,7 @@ func New(cfgFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("token_file", "spotify-token.json")
 	v.SetDefault("settings_file", "aux-settings.json")
 	v.SetDefault("chats_dir", "chats")
+	v.SetDefault("preferences_file", "aux-preferences.json")
 	v.SetDefault("admin.password", "")
 	v.SetDefault("anthropic.model", "claude-opus-4-8")
 	v.SetDefault("anthropic.max_tokens", 8192)

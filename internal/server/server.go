@@ -18,6 +18,7 @@ import (
 	"github.com/EmpireForge-ef/aux-app/internal/chat"
 	"github.com/EmpireForge-ef/aux-app/internal/config"
 	"github.com/EmpireForge-ef/aux-app/internal/oidcauth"
+	"github.com/EmpireForge-ef/aux-app/internal/preferences"
 	"github.com/EmpireForge-ef/aux-app/internal/settings"
 	"github.com/EmpireForge-ef/aux-app/internal/spotify"
 )
@@ -37,12 +38,17 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	if err != nil {
 		return fmt.Errorf("open chats dir %s: %w", cfg.ChatsDir, err)
 	}
+	prefs, err := preferences.Load(cfg.PreferencesFile)
+	if err != nil {
+		return fmt.Errorf("load preferences %s: %w", cfg.PreferencesFile, err)
+	}
 
 	s := &server{
 		cfg:           cfg,
 		version:       version,
 		settings:      store,
 		chats:         chats,
+		prefs:         prefs,
 		adminSessions: newSessionStore(),
 		confirms:      make(map[string]chan bool),
 	}
@@ -139,6 +145,7 @@ type server struct {
 	version       string
 	settings      *settings.Store
 	chats         *chat.Store
+	prefs         *preferences.Store
 	adminSessions *sessionStore
 	oidc          *oidcauth.Authenticator // nil when OIDC is not configured
 

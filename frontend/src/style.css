@@ -221,6 +221,19 @@ header h1 .brand {
   font-size: 0.85rem;
 }
 
+.msg.note {
+  align-self: center;
+  background: transparent;
+  color: var(--muted, #8a8f98);
+  font-size: 0.8rem;
+  padding: 0.3rem 0.6rem;
+}
+
+/* The send button becomes a Stop control while a turn is running. */
+#chat-send.stopping {
+  background: var(--error);
+}
+
 .copy-btn {
   align-self: flex-end;
   background: none;

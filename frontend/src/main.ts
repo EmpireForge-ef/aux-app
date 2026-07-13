@@ -1,7 +1,7 @@
 import "./style.css";
 
 type AgentEvent = {
-  type: "text" | "tool_use" | "tool_result" | "confirm" | "done" | "error";
+  type: "user" | "text" | "tool_use" | "tool_result" | "confirm" | "done" | "error";
   text?: string;
   name?: string;
   input?: unknown;
@@ -10,7 +10,23 @@ type AgentEvent = {
   confirm_id?: string;
   stop_reason?: string;
   message?: string;
+  resolved?: boolean;
 };
+
+// ChatRun tracks a turn that is streaming from the server. The turn keeps
+// running server-side even if this connection drops (mobile backgrounding), so
+// we can reconnect and resume from `processed` — the number of events already
+// applied to the DOM, which equals our position in the server's event buffer.
+type ChatRun = {
+  chatId: string;
+  processed: number;
+  active: boolean;
+  abort: AbortController;
+  assistantEl: HTMLDivElement | null;
+  currentTool: HTMLDivElement | null;
+};
+
+let currentRun: ChatRun | null = null;
 
 type AdminSession = {
   authenticated: boolean;
@@ -43,9 +59,40 @@ type Settings = {
   anthropic_api_key: string; // masked by the server
   anthropic_model: string;
   anthropic_max_tokens: number;
+  timezone: string;
 };
 
 type ModelInfo = { id: string; display_name: string; max_tokens: number };
+
+// A convenient shortlist for the timezone picker. The server accepts any valid
+// IANA name, so this only needs to cover the common cases.
+const TIMEZONES: string[] = [
+  "UTC",
+  "Europe/London",
+  "Europe/Berlin",
+  "Europe/Paris",
+  "Europe/Madrid",
+  "Europe/Rome",
+  "Europe/Amsterdam",
+  "Europe/Zurich",
+  "Europe/Vienna",
+  "Europe/Warsaw",
+  "Europe/Athens",
+  "Europe/Istanbul",
+  "Europe/Moscow",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Sao_Paulo",
+  "Asia/Dubai",
+  "Asia/Kolkata",
+  "Asia/Shanghai",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+  "Pacific/Auckland",
+];
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -176,7 +223,10 @@ function renderApp(session: AdminSession): void {
         <label>Max output tokens
           <input id="set-max-tokens" type="number" min="256" step="256" autocomplete="off" />
         </label>
-        <p class="hint">Secrets stay blurred: leave a field empty to keep its current value. Pick a cheaper model or lower the token cap to save cost. Changes apply immediately.</p>
+        <label>Timezone
+          <select id="set-timezone"></select>
+        </label>
+        <p class="hint">Secrets stay blurred: leave a field empty to keep its current value. Pick a cheaper model or lower the token cap to save cost. The timezone sets the clock the AI reads. Changes apply immediately.</p>
         <p class="error-text" id="settings-error"></p>
         <div class="modal-actions">
           <button type="button" id="settings-cancel">Cancel</button>
@@ -331,6 +381,10 @@ async function refreshChatList(): Promise<ChatMeta[]> {
 }
 
 async function selectChat(id: string): Promise<void> {
+  // Stop rendering another chat's live turn into this view; it keeps running
+  // server-side and can be resumed later.
+  if (currentRun && currentRun.chatId !== id) currentRun.abort.abort();
+
   const res = await fetch(`/api/chats/${id}`);
   if (res.status === 401) return boot();
   if (!res.ok) {
@@ -340,6 +394,7 @@ async function selectChat(id: string): Promise<void> {
   const data = (await res.json()) as {
     meta: ChatMeta;
     transcript: TranscriptEntry[] | null;
+    running?: boolean;
   };
 
   activeChatId = id;
@@ -367,7 +422,28 @@ async function selectChat(id: string): Promise<void> {
   }
   await refreshChatList(); // re-render highlights with the new active chat
   setDrawer(false); // close the mobile drawer after picking a chat
-  document.querySelector<HTMLInputElement>("#chat-input")?.focus();
+
+  if (data.running) {
+    // A turn is still executing for this chat (it kept going while we were
+    // away). Attach and replay its buffered events after the saved transcript.
+    if (!currentRun || currentRun.chatId !== id) {
+      currentRun = {
+        chatId: id,
+        processed: 0,
+        active: true,
+        abort: new AbortController(),
+        assistantEl: null,
+        currentTool: null,
+      };
+    } else {
+      currentRun.active = true;
+    }
+    void reattach(0);
+  } else {
+    if (currentRun && currentRun.chatId === id) currentRun = null;
+    setRunning(false);
+    document.querySelector<HTMLInputElement>("#chat-input")?.focus();
+  }
 }
 
 // startRename swaps a chat's title button for an inline text field. Enter or
@@ -421,6 +497,18 @@ function wireSettings(): void {
   const modelSelect = document.querySelector<HTMLSelectElement>("#set-model")!;
   const fetchModels = document.querySelector<HTMLButtonElement>("#fetch-models")!;
   const maxTokens = document.querySelector<HTMLInputElement>("#set-max-tokens")!;
+  const timezone = document.querySelector<HTMLSelectElement>("#set-timezone")!;
+
+  // Ensures `tz` is present as an option and selected; adds it (e.g. a
+  // configured zone that isn't in the shortlist) if missing.
+  const ensureTimezoneOption = (tz: string) => {
+    if (![...timezone.options].some((o) => o.value === tz)) {
+      timezone.add(new Option(tz || "Server default", tz));
+    }
+    timezone.value = tz;
+  };
+  timezone.add(new Option("Server default", ""));
+  for (const tz of TIMEZONES) timezone.add(new Option(tz, tz));
 
   // Ensures `id` is an option and selected; adds it if the list doesn't have
   // it yet (e.g. the configured model before any fetch).
@@ -445,6 +533,7 @@ function wireSettings(): void {
       anthropicKey.placeholder = s.anthropic_api_key || "not set";
       ensureModelOption(s.anthropic_model);
       maxTokens.value = String(s.anthropic_max_tokens || "");
+      ensureTimezoneOption(s.timezone ?? "");
       modal.showModal();
     } catch {
       errEl.textContent = "could not load settings";
@@ -492,6 +581,7 @@ function wireSettings(): void {
     if (modelSelect.value) body.anthropic_model = modelSelect.value;
     const tokens = parseInt(maxTokens.value, 10);
     if (Number.isFinite(tokens) && tokens > 0) body.anthropic_max_tokens = tokens;
+    if (timezone.value) body.timezone = timezone.value;
     if (Object.keys(body).length === 0) {
       modal.close();
       return;
@@ -621,113 +711,261 @@ function summarizeInput(input: unknown): string {
   }
 }
 
-async function streamChat(
-  message: string,
-  onEvent: (ev: AgentEvent) => void | Promise<void>,
-): Promise<void> {
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: activeChatId, message }),
-  });
+// --- run streaming & resumption ---------------------------------------------
+
+// confirmOpen guards against opening a second confirmation dialog (e.g. if the
+// tab is resumed while one is already showing).
+let confirmOpen = false;
+
+// addNote appends a muted, centered status line (e.g. "Stopped.").
+function addNote(text: string): void {
+  const messagesEl = document.querySelector<HTMLDivElement>("#messages")!;
+  const div = document.createElement("div");
+  div.className = "msg note";
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// setRunning switches the composer between "Send" and a "Stop" control.
+function setRunning(running: boolean): void {
+  const sendBtn = document.querySelector<HTMLButtonElement>("#chat-send");
+  const input = document.querySelector<HTMLInputElement>("#chat-input");
+  if (sendBtn) {
+    sendBtn.textContent = running ? "Stop" : "Send";
+    sendBtn.classList.toggle("stopping", running);
+    sendBtn.disabled = false;
+  }
+  if (input) input.disabled = running;
+}
+
+function finishRun(): void {
+  currentRun = null;
+  setRunning(false);
+  document.querySelector<HTMLInputElement>("#chat-input")?.focus();
+  refreshChatList(); // the first message sets the chat title
+}
+
+// renderEvent applies one streamed event to the DOM, advancing the run's
+// rendering cursor (the open assistant bubble / tool chip). The cursor lives on
+// the run so it survives reconnects.
+async function renderEvent(run: ChatRun, ev: AgentEvent): Promise<void> {
+  const messagesEl = document.querySelector<HTMLDivElement>("#messages")!;
+  switch (ev.type) {
+    case "user":
+      run.assistantEl = null;
+      run.currentTool = null;
+      addMessage("user", ev.text ?? "");
+      break;
+    case "text": {
+      if (!run.assistantEl) run.assistantEl = addMessage("assistant");
+      const textEl = run.assistantEl.querySelector<HTMLElement>(".msg-text")!;
+      textEl.textContent += ev.text ?? "";
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      break;
+    }
+    case "tool_use":
+      run.assistantEl = null; // next text goes into a fresh bubble
+      run.currentTool = addTool(ev.name ?? "tool");
+      break;
+    case "tool_result":
+      if (run.currentTool) {
+        run.currentTool.className = `tool ${ev.ok ? "ok" : "failed"}`;
+        run.currentTool = null;
+      }
+      break;
+    case "confirm": {
+      if (ev.resolved) break; // already decided on an earlier connection
+      confirmOpen = true;
+      try {
+        const approved = await askConfirm(ev.summary ?? "", summarizeInput(ev.input));
+        await fetch("/api/chat/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm_id: ev.confirm_id, approved }),
+        });
+      } finally {
+        confirmOpen = false;
+      }
+      break;
+    }
+    case "error":
+      run.assistantEl = null;
+      run.currentTool = null;
+      addMessage("error", ev.message ?? "something went wrong");
+      break;
+    case "done":
+      if (ev.stop_reason === "stopped") addNote("⏹ Stopped.");
+      break;
+  }
+}
+
+// consumeStream reads an SSE body frame by frame, applying each event and
+// advancing run.processed (which tracks our position in the server's buffer).
+// A terminal event marks the run inactive; a dropped connection leaves it
+// active so it can be resumed.
+async function consumeStream(res: Response, run: ChatRun): Promise<void> {
   if (res.status === 401) {
     boot();
-    throw new Error("session expired — please log in again");
+    return;
+  }
+  if (res.status === 204) {
+    run.active = false; // the turn already finished server-side
+    return;
   }
   if (!res.ok || !res.body) {
-    throw new Error(`chat request failed: ${res.status}`);
+    run.active = false;
+    addMessage("error", `chat request failed: ${res.status}`);
+    return;
   }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-
   for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch {
+      return; // aborted (we reconnected) or the network dropped
+    }
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
 
     let sep: number;
     while ((sep = buffer.indexOf("\n\n")) !== -1) {
       const raw = buffer.slice(0, sep);
       buffer = buffer.slice(sep + 2);
-      const dataLine = raw
-        .split("\n")
-        .find((line) => line.startsWith("data: "));
+      const dataLine = raw.split("\n").find((line) => line.startsWith("data: "));
       if (!dataLine) continue;
-      let parsed: AgentEvent | null = null;
+      let ev: AgentEvent | null = null;
       try {
-        parsed = JSON.parse(dataLine.slice(6)) as AgentEvent;
+        ev = JSON.parse(dataLine.slice(6)) as AgentEvent;
       } catch {
         // ignore malformed frames
       }
-      // Await the handler so a confirmation blocks until the user decides —
-      // the server pauses the turn until we POST the decision.
-      if (parsed) await onEvent(parsed);
+      if (!ev) continue;
+      if (run.chatId !== activeChatId) return; // user navigated to another chat
+      // Await so a confirmation blocks the loop until the user decides — the
+      // server is blocked waiting for the decision anyway.
+      await renderEvent(run, ev);
+      run.processed++;
+      if (ev.type === "done" || ev.type === "error") run.active = false;
     }
   }
 }
 
+// reattach reconnects to the in-flight turn and resumes streaming from index
+// `from`: 0 to replay from the start (fresh view), or run.processed to continue
+// where a dropped connection left off.
+async function reattach(from: number): Promise<void> {
+  const run = currentRun;
+  if (!run || !run.active || run.chatId !== activeChatId) return;
+  run.abort.abort();
+  run.abort = new AbortController();
+  let res: Response;
+  try {
+    res = await fetch(
+      `/api/chat/stream?chat_id=${encodeURIComponent(run.chatId)}&from=${from}`,
+      { signal: run.abort.signal },
+    );
+  } catch {
+    return; // dropped again; a later visibility change retries
+  }
+  if (res.status === 401) {
+    boot();
+    return;
+  }
+  if (res.status === 204) {
+    // Finished while we were away — fall back to the saved transcript.
+    run.active = false;
+    currentRun = null;
+    setRunning(false);
+    await selectChat(run.chatId);
+    return;
+  }
+  run.processed = from;
+  setRunning(true);
+  await consumeStream(res, run);
+  if (currentRun === run && !run.active) finishRun();
+}
+
+// stopTurn cancels the running turn server-side and resets the composer.
+async function stopTurn(): Promise<void> {
+  const run = currentRun;
+  if (!run) return;
+  run.active = false;
+  run.abort.abort();
+  try {
+    await fetch("/api/chat/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: run.chatId }),
+    });
+  } catch {
+    /* best effort */
+  }
+  addNote("⏹ Stopped.");
+  finishRun();
+}
+
 function wireChat(): void {
-  const messagesEl = document.querySelector<HTMLDivElement>("#messages")!;
   const form = document.querySelector<HTMLFormElement>("#chat-form")!;
   const input = document.querySelector<HTMLInputElement>("#chat-input")!;
-  const sendBtn = document.querySelector<HTMLButtonElement>("#chat-send")!;
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    // While a turn runs, the button is a Stop control.
+    if (currentRun?.active) {
+      await stopTurn();
+      return;
+    }
     const text = input.value.trim();
-    if (!text || sendBtn.disabled || !activeChatId) return;
-
+    if (!text || !activeChatId) return;
     input.value = "";
-    sendBtn.disabled = true;
-    addMessage("user", text);
 
-    let assistantEl: HTMLDivElement | null = null;
-    let currentTool: HTMLDivElement | null = null;
-
+    const run: ChatRun = {
+      chatId: activeChatId,
+      processed: 0,
+      active: true,
+      abort: new AbortController(),
+      assistantEl: null,
+      currentTool: null,
+    };
+    currentRun = run;
+    setRunning(true);
     try {
-      await streamChat(text, async (ev) => {
-        switch (ev.type) {
-          case "text": {
-            if (!assistantEl) assistantEl = addMessage("assistant");
-            const textEl = assistantEl.querySelector<HTMLElement>(".msg-text")!;
-            textEl.textContent += ev.text ?? "";
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-            break;
-          }
-          case "tool_use":
-            assistantEl = null; // next text goes into a fresh bubble
-            currentTool = addTool(ev.name ?? "tool");
-            break;
-          case "tool_result":
-            if (currentTool) {
-              currentTool.className = `tool ${ev.ok ? "ok" : "failed"}`;
-              currentTool = null;
-            }
-            break;
-          case "confirm": {
-            const approved = await askConfirm(ev.summary ?? "", summarizeInput(ev.input));
-            await fetch("/api/chat/confirm", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ confirm_id: ev.confirm_id, approved }),
-            });
-            break;
-          }
-          case "error":
-            addMessage("error", ev.message ?? "something went wrong");
-            break;
-          case "done":
-            break;
-        }
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: run.chatId, message: text }),
+        signal: run.abort.signal,
       });
-    } catch (err) {
-      addMessage("error", err instanceof Error ? err.message : String(err));
+      if (res.status === 409) {
+        // A turn was already running (started elsewhere) — attach to it.
+        await reattach(0);
+        return;
+      }
+      await consumeStream(res, run);
+    } catch {
+      // Connection dropped. If the turn may still be running, keep the Stop
+      // button up so regaining visibility resumes it.
+      if (!run.active) addMessage("error", "connection lost");
     } finally {
-      sendBtn.disabled = false;
-      input.focus();
-      refreshChatList(); // the first message sets the chat title
+      if (currentRun === run && !run.active) finishRun();
+    }
+  });
+
+  // When a backgrounded mobile browser returns to the foreground, reconnect to
+  // the turn that kept running server-side and resume where we left off.
+  document.addEventListener("visibilitychange", () => {
+    if (
+      document.visibilityState === "visible" &&
+      currentRun?.active &&
+      currentRun.chatId === activeChatId &&
+      !confirmOpen
+    ) {
+      void reattach(currentRun.processed);
     }
   });
 

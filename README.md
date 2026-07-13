@@ -24,7 +24,12 @@ artists, and control playback.
   return to old ones, and rename or delete them; full context (including tool
   calls) survives restarts. Each message has a copy button.
 - **Works on mobile** — responsive layout with an off-canvas chat drawer, so
-  it's usable on a phone as well as a desktop.
+  it's usable on a phone as well as a desktop. Turns keep running on the server
+  even if you switch apps or your browser is backgrounded: reopen the tab and
+  the answer is there (or still streaming). A **Stop** button cancels a turn
+  whenever you want.
+- **Configurable timezone** — pick your timezone in the settings so the clock
+  the AI reads ("something for a Friday night") matches your local time.
 - **Admin login** — protect the whole app with a password and/or OpenID
   Connect single sign-on (Keycloak-compatible).
 - **Runtime settings UI** — set the Spotify credentials, Anthropic API key,
@@ -151,6 +156,9 @@ of precedence. Each setting lists its environment variable, the equivalent
 - **`AUX_PLAYLIST_CACHE_FILE`** (`playlist_cache_file`, default
   `aux-playlist-cache.json`) — caches playlist contents (keyed by snapshot) so
   the AI can skip duplicates on add without re-fetching the whole playlist.
+- **`AUX_TIMEZONE`** (`timezone`, default empty = server local) — an IANA name
+  such as `Europe/Berlin` for the clock the AI is given each turn. Can also be
+  set from the settings UI.
 
 ## Admin login & runtime settings
 
@@ -179,7 +187,9 @@ change at runtime:
   Anthropic API and pick one, so you automatically get newly released models
   without redeploying;
 - the **max output tokens** cap — lower it (or choose a cheaper model like
-  Haiku) to save cost.
+  Haiku) to save cost;
+- the **timezone** — pick your IANA zone (e.g. `Europe/Berlin`) so the clock
+  the AI reads matches your local time.
 
 Values saved there are persisted to `settings_file` (0600), override the
 environment, and hot-swap the Spotify/AI clients without a restart — so a

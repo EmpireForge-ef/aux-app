@@ -6,6 +6,11 @@ import (
 	"fmt"
 	"os"
 
+	// Embed the IANA timezone database so the configurable timezone works on
+	// any base image (Alpine and scratch/distroless ship without tzdata) and
+	// for bare-binary deploys, without depending on the host.
+	_ "time/tzdata"
+
 	"github.com/spf13/cobra"
 
 	"github.com/EmpireForge-ef/aux-app/internal/config"

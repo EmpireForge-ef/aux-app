@@ -20,6 +20,9 @@ type Values struct {
 	AnthropicAPIKey     string `json:"anthropic_api_key,omitempty"`
 	AnthropicModel      string `json:"anthropic_model,omitempty"`
 	AnthropicMaxTokens  int64  `json:"anthropic_max_tokens,omitempty"`
+	// Timezone is an IANA name (e.g. "Europe/Berlin"); empty leaves the
+	// configured/server zone in place.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // Store loads and saves Values on disk. The file is created with 0600 since
@@ -72,6 +75,9 @@ func (s *Store) Update(v Values) (Values, error) {
 	}
 	if v.AnthropicMaxTokens > 0 {
 		s.values.AnthropicMaxTokens = v.AnthropicMaxTokens
+	}
+	if v.Timezone != "" {
+		s.values.Timezone = strings.TrimSpace(v.Timezone)
 	}
 	data, err := json.MarshalIndent(s.values, "", "  ")
 	if err != nil {

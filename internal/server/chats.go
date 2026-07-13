@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +44,10 @@ func (s *server) handleGetChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"meta": c.Meta, "transcript": c.Transcript})
+	s.runsMu.Lock()
+	_, running := s.runs[r.PathValue("id")]
+	s.runsMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"meta": c.Meta, "transcript": c.Transcript, "running": running})
 }
 
 func (s *server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
@@ -94,11 +98,16 @@ func (s *server) handleRenameChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meta)
 }
 
-// handleChat runs one user turn in a persisted chat and streams the agent's
-// response as server-sent events (event names mirror ai.Event.Type: text,
-// tool_use, tool_result, done, error). The updated conversation — model
-// history and display transcript — is persisted afterwards, also when the
-// turn fails partway.
+// errTurnRunning signals that a chat already has a turn in flight.
+var errTurnRunning = errors.New("a turn is already running for this chat")
+
+// handleChat starts one user turn in a persisted chat and streams the agent's
+// response as server-sent events (event names mirror ai.Event.Type: user,
+// text, tool_use, tool_result, confirm, done, error). Crucially the turn runs
+// on a background goroutine that is NOT tied to this request, so it keeps going
+// — and is persisted — even if the client disconnects (a phone browser being
+// backgrounded). The client reconnects via GET /api/chat/stream to resume, and
+// POST /api/chat/stop cancels the turn.
 func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ChatID  string `json:"chat_id"`
@@ -109,22 +118,87 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serialise turns per chat so concurrent requests can't interleave
-	// histories.
-	lock := s.chats.Lock(req.ChatID)
-	lock.Lock()
-	defer lock.Unlock()
-
-	c, err := s.chats.Get(req.ChatID)
+	rn, err := s.startTurn(req.ChatID, req.Message)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, chat.ErrNotFound) {
-			status = http.StatusNotFound
+		if errors.Is(err, errTurnRunning) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
 		}
-		writeJSON(w, status, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.streamRun(w, r, rn, 0)
+}
 
+// handleChatStream reattaches to an in-flight turn and streams its buffered
+// then live events from index `from`, so a client that dropped (mobile
+// backgrounding, a reload) can pick the turn back up. 204 means no turn is
+// running, and the client should fall back to the saved transcript.
+func (s *server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	chatID := r.URL.Query().Get("chat_id")
+	if chatID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "chat_id is required"})
+		return
+	}
+	from := 0
+	if v := r.URL.Query().Get("from"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			from = n
+		}
+	}
+	s.runsMu.Lock()
+	rn := s.runs[chatID]
+	s.runsMu.Unlock()
+	if rn == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.streamRun(w, r, rn, from)
+}
+
+// handleChatStop cancels the in-flight turn for a chat (the Stop button). The
+// turn stops at its next cancellation point, persists whatever it already did,
+// and emits a "stopped" done event.
+func (s *server) handleChatStop(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ChatID string `json:"chat_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "chat_id is required"})
+		return
+	}
+	s.runsMu.Lock()
+	rn := s.runs[req.ChatID]
+	s.runsMu.Unlock()
+	if rn != nil {
+		rn.cancel()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// startTurn registers a new in-flight turn for a chat and launches the
+// background goroutine that runs it. It fails with errTurnRunning if one is
+// already running for that chat.
+func (s *server) startTurn(chatID, message string) (*run, error) {
+	s.runsMu.Lock()
+	if _, ok := s.runs[chatID]; ok {
+		s.runsMu.Unlock()
+		return nil, errTurnRunning
+	}
+	// Detached from any request context so the turn survives client
+	// disconnects; only Stop (rn.cancel) ends it early.
+	ctx, cancel := context.WithCancel(context.Background())
+	rn := newRun(cancel)
+	s.runs[chatID] = rn
+	s.runsMu.Unlock()
+
+	go s.runTurn(ctx, chatID, message, rn)
+	return rn, nil
+}
+
+// streamRun writes a run's events to an SSE response until the run finishes or
+// the client disconnects. On disconnect the run keeps executing server-side.
+func (s *server) streamRun(w http.ResponseWriter, r *http.Request, rn *run, from int) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
@@ -133,13 +207,56 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
+
+	send := func(ev ai.Event) error {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			return nil // skip an unmarshalable event rather than abort
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	_ = rn.stream(r.Context(), from, send)
+}
+
+// runTurn executes one turn end to end on a background goroutine: it loads the
+// chat, runs the agent while buffering events into rn, and persists the result
+// — even if no client is connected. The per-chat lock serialises it against
+// renames and further turns.
+func (s *server) runTurn(ctx context.Context, chatID, message string, rn *run) {
+	defer func() {
+		rn.finish()
+		s.runsMu.Lock()
+		delete(s.runs, chatID)
+		s.runsMu.Unlock()
+		rn.cancel() // release the context
+	}()
+
+	lock := s.chats.Lock(chatID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	c, err := s.chats.Get(chatID)
+	if err != nil {
+		rn.append(ai.Event{Type: "error", Message: "loading the chat failed: " + err.Error()})
+		return
+	}
+
+	// Echo the user's message as the first event so a client that reconnects
+	// or reloads and replays the buffer reconstructs the whole turn (the
+	// message isn't persisted to the transcript until the turn is saved).
+	rn.append(ai.Event{Type: "user", Text: message})
 
 	// The transcript mirrors what the emit events render in the UI: text
 	// deltas coalesce into one assistant entry, tool chips resolve in place.
 	if len(c.Messages) == 0 {
-		c.Title = chat.TitleFrom(req.Message)
+		c.Title = chat.TitleFrom(message)
 	}
-	c.Transcript = append(c.Transcript, chat.Entry{Role: "user", Text: req.Message})
+	c.Transcript = append(c.Transcript, chat.Entry{Role: "user", Text: message})
 	var textBuf strings.Builder
 	flushText := func() {
 		if textBuf.Len() > 0 {
@@ -166,20 +283,16 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 			flushText()
 			c.Transcript = append(c.Transcript, chat.Entry{Role: "error", Text: ev.Message})
 		}
-		data, err := json.Marshal(ev)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
-		flusher.Flush()
+		rn.append(ev)
 	}
 
 	mgr, agent := s.clients()
 	sp, _ := mgr.Client() // nil is fine; tools explain how to connect
 
 	// confirm gates destructive tools: it emits a confirm event, then blocks
-	// until POST /api/chat/confirm delivers the user's decision (or the
-	// request is cancelled or the confirmation times out — both decline).
+	// until POST /api/chat/confirm delivers the user's decision (or the turn
+	// is stopped or the confirmation times out — both decline). markResolved
+	// lets a from-scratch replay skip re-prompting for an answered action.
 	confirm := func(ctx context.Context, cr ai.ConfirmRequest) bool {
 		id, err := randomToken()
 		if err != nil {
@@ -188,6 +301,7 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		ch := make(chan bool, 1)
 		s.addConfirm(id, ch)
 		defer s.removeConfirm(id)
+		defer rn.markResolved(id)
 
 		emit(ai.Event{Type: "confirm", ConfirmID: id, Name: cr.Name, Input: cr.Input, Summary: cr.Question})
 
@@ -201,28 +315,39 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	now := time.Now()
+	if loc := s.turnLocation(); loc != nil {
+		now = now.In(loc)
+	}
+
 	// Tool handlers reach the temp-playlist registry and playlist cache
 	// through the context.
-	turnCtx := aitools.WithTempPlaylists(r.Context(), s.temps)
+	turnCtx := aitools.WithTempPlaylists(ctx, s.temps)
 	turnCtx = aitools.WithPlaylistCache(turnCtx, s.plcache)
-	messages, chatErr := agent.Chat(turnCtx, c.Messages, req.Message, sp, emit, ai.TurnOptions{
+	messages, chatErr := agent.Chat(turnCtx, c.Messages, message, sp, emit, ai.TurnOptions{
 		Confirm: confirm,
 		Memory:  s.prefs,
 		History: s.history,
+		Now:     now,
 		// Skip the confirmation prompt for edits to throwaway temp playlists.
 		SkipConfirm: func(name string, input json.RawMessage) bool {
 			return aitools.IsTempPlaylistEdit(s.temps, name, input)
 		},
 	})
 	if chatErr != nil {
-		log.Printf("chat error (chat %s): %v", req.ChatID, chatErr)
-		emit(ai.Event{Type: "error", Message: chatErr.Error()})
+		if errors.Is(chatErr, context.Canceled) {
+			flushText()
+			emit(ai.Event{Type: "done", StopReason: "stopped"})
+		} else {
+			log.Printf("chat error (chat %s): %v", chatID, chatErr)
+			emit(ai.Event{Type: "error", Message: chatErr.Error()})
+		}
 	}
 	flushText()
 
 	c.Messages = messages
 	if err := s.chats.Save(c); err != nil {
-		log.Printf("persist chat %s failed: %v", req.ChatID, err)
+		log.Printf("persist chat %s failed: %v", chatID, err)
 		emit(ai.Event{Type: "error", Message: "saving the conversation failed: " + err.Error()})
 	}
 }

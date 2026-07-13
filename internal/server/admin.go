@@ -175,6 +175,7 @@ func (s *server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"anthropic_api_key":     settings.Mask(key),
 		"anthropic_model":       model,
 		"anthropic_max_tokens":  maxTokens,
+		"timezone":              s.effectiveTimezone(),
 	})
 }
 
@@ -203,6 +204,12 @@ func (s *server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if req == (settings.Values{}) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nothing to update"})
 		return
+	}
+	if req.Timezone != "" {
+		if _, err := time.LoadLocation(req.Timezone); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown timezone " + req.Timezone + " (use an IANA name like Europe/Berlin)"})
+			return
+		}
 	}
 	if _, err := s.settings.Update(req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist settings: " + err.Error()})

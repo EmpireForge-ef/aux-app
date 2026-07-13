@@ -54,6 +54,10 @@ type Event struct {
 	ConfirmID  string          `json:"confirm_id,omitempty"`
 	StopReason string          `json:"stop_reason,omitempty"`
 	Message    string          `json:"message,omitempty"`
+	// Resolved marks a confirm event whose decision was already made, so a
+	// client replaying the buffered turn from the start renders it inertly
+	// instead of re-opening the dialog. Set only when streaming, never stored.
+	Resolved bool `json:"resolved,omitempty"`
 }
 
 // ConfirmRequest describes a destructive tool call awaiting the user's
@@ -414,7 +418,7 @@ func turnContext(opts TurnOptions) string {
 		now = time.Now()
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Current local time: %s.", now.Format("Monday 2006-01-02 15:04"))
+	fmt.Fprintf(&b, "Current local time: %s.", now.Format("Monday 2006-01-02 15:04 MST"))
 	if opts.Memory != nil {
 		if prefs := opts.Memory.Text(); prefs != "" {
 			b.WriteString("\n\nThe user's saved music preferences (apply them unless they say otherwise):\n")

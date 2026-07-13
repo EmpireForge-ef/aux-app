@@ -69,6 +69,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		plcache:       plcache,
 		adminSessions: newSessionStore(),
 		confirms:      make(map[string]chan bool),
+		runs:          make(map[string]*run),
 	}
 	if cfg.OIDC.Enabled() {
 		s.oidc = oidcauth.New(oidcauth.Config{
@@ -106,6 +107,8 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	mux.HandleFunc("GET /api/auth/status", s.requireAuth(s.handleAuthStatus))
 	mux.HandleFunc("POST /api/auth/logout", s.requireAuth(s.handleLogout))
 	mux.HandleFunc("POST /api/chat", s.requireAuth(s.handleChat))
+	mux.HandleFunc("GET /api/chat/stream", s.requireAuth(s.handleChatStream))
+	mux.HandleFunc("POST /api/chat/stop", s.requireAuth(s.handleChatStop))
 	mux.HandleFunc("POST /api/chat/confirm", s.requireAuth(s.handleChatConfirm))
 	mux.HandleFunc("GET /api/chats", s.requireAuth(s.handleListChats))
 	mux.HandleFunc("POST /api/chats", s.requireAuth(s.handleCreateChat))
@@ -179,6 +182,12 @@ type server struct {
 	// from POST /api/chat/confirm, keyed by a per-request confirmation ID.
 	confirmMu sync.Mutex
 	confirms  map[string]chan bool
+
+	// runs tracks in-flight chat turns, keyed by chat ID. A turn keeps running
+	// here even after the client that started it disconnects (e.g. a phone
+	// browser is backgrounded); clients reconnect to replay and resume it.
+	runsMu sync.Mutex
+	runs   map[string]*run
 }
 
 func (s *server) addConfirm(id string, ch chan bool) {
@@ -224,6 +233,30 @@ func (s *server) effectiveCredentials() (spotifyID, spotifySecret, anthropicKey 
 		anthropicKey = v.AnthropicAPIKey
 	}
 	return
+}
+
+// effectiveTimezone merges the persisted timezone setting over the
+// environment/file configuration; empty means the server's local zone.
+func (s *server) effectiveTimezone() string {
+	if tz := s.settings.Get().Timezone; tz != "" {
+		return tz
+	}
+	return s.cfg.Timezone
+}
+
+// turnLocation resolves the effective timezone to a *time.Location, or nil
+// (meaning server-local) when unset or unparseable.
+func (s *server) turnLocation() *time.Location {
+	name := s.effectiveTimezone()
+	if name == "" {
+		return nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		log.Printf("warning: invalid timezone %q, falling back to server local: %v", name, err)
+		return nil
+	}
+	return loc
 }
 
 // effectiveModel merges the persisted model / max-tokens settings over the

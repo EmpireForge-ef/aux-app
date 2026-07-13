@@ -57,20 +57,24 @@ func (o OIDC) Enabled() bool {
 }
 
 type Config struct {
-	Addr            string    `mapstructure:"addr"`
-	StaticDir       string    `mapstructure:"static_dir"`
-	PublicURL       string    `mapstructure:"public_url"`
-	TokenFile       string    `mapstructure:"token_file"`
-	SettingsFile    string    `mapstructure:"settings_file"`
-	ChatsDir        string    `mapstructure:"chats_dir"`
-	PreferencesFile string    `mapstructure:"preferences_file"`
-	TempPlaylists   string    `mapstructure:"temp_playlists_file"`
-	HistoryFile     string    `mapstructure:"history_file"`
-	PlaylistCache   string    `mapstructure:"playlist_cache_file"`
-	Spotify         Spotify   `mapstructure:"spotify"`
-	Anthropic       Anthropic `mapstructure:"anthropic"`
-	Admin           Admin     `mapstructure:"admin"`
-	OIDC            OIDC      `mapstructure:"oidc"`
+	Addr            string `mapstructure:"addr"`
+	StaticDir       string `mapstructure:"static_dir"`
+	PublicURL       string `mapstructure:"public_url"`
+	TokenFile       string `mapstructure:"token_file"`
+	SettingsFile    string `mapstructure:"settings_file"`
+	ChatsDir        string `mapstructure:"chats_dir"`
+	PreferencesFile string `mapstructure:"preferences_file"`
+	TempPlaylists   string `mapstructure:"temp_playlists_file"`
+	HistoryFile     string `mapstructure:"history_file"`
+	PlaylistCache   string `mapstructure:"playlist_cache_file"`
+	// Timezone is an IANA name (e.g. "Europe/Berlin") used to render the
+	// current time given to the AI each turn. Empty means the server's local
+	// zone. The admin settings UI can override it at runtime.
+	Timezone  string    `mapstructure:"timezone"`
+	Spotify   Spotify   `mapstructure:"spotify"`
+	Anthropic Anthropic `mapstructure:"anthropic"`
+	Admin     Admin     `mapstructure:"admin"`
+	OIDC      OIDC      `mapstructure:"oidc"`
 }
 
 // New builds a viper instance with defaults, env bindings, and an optional
@@ -91,6 +95,7 @@ func New(cfgFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("temp_playlists_file", "aux-temp-playlists.json")
 	v.SetDefault("history_file", "aux-history.json")
 	v.SetDefault("playlist_cache_file", "aux-playlist-cache.json")
+	v.SetDefault("timezone", "")
 	v.SetDefault("admin.password", "")
 	v.SetDefault("anthropic.model", "claude-opus-4-8")
 	v.SetDefault("anthropic.max_tokens", 8192)

@@ -142,6 +142,9 @@ of precedence. Each setting lists its environment variable, the equivalent
 - **`AUX_PREFERENCES_FILE`** (`preferences_file`, default
   `aux-preferences.json`) — where the user's saved music preferences (the AI's
   cross-chat memory) are persisted.
+- **`AUX_TEMP_PLAYLISTS_FILE`** (`temp_playlists_file`, default
+  `aux-temp-playlists.json`) — tracks the throwaway "queue" playlists the AI
+  creates, whose edits skip the confirmation prompt.
 
 ## Admin login & runtime settings
 

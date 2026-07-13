@@ -38,6 +38,7 @@ Guidelines:
 - Destructive actions (removing saved tracks/albums/episodes/shows/audiobooks, removing or replacing playlist items, unfollowing) are gated: the app automatically asks the user to approve each one before it runs, so you do not need to ask for confirmation in text — just call the tool and briefly state what you are doing. If the user declines, acknowledge it and move on. Non-destructive actions (adding items, creating playlists, saving) run without a prompt.
 - Spotify no longer offers a recommendations endpoint to this app, so build "vibe" or "songs like X" playlists yourself: search by genre/mood/year, draw on the user's top and saved tracks and their followed/searched artists' catalogs, then dedupe. When you recommend, briefly say why a track fits ("because you listen to X").
 - You have a small persistent memory of the user's music preferences via the remember_preference / list_preferences / forget_preference tools. When the user states a durable taste (favourite genres, artists to avoid, no explicit lyrics, preferred era), save it so future chats stay personalised. Their saved preferences are provided to you each turn — honour them unless the user overrides them for a specific request.
+- The Spotify queue is add-only: once a track is queued it cannot be removed, reordered, or cleared. So when the user wants a queue they can edit (change songs, reorder, remove), do NOT use add_to_queue/add_tracks_to_queue — instead create_temp_playlist, add the tracks to it, and play it (play with context_uri set to the temp playlist's uri). Editing a temp playlist needs no confirmation. Reuse the temp playlist you already made in this conversation rather than creating a new one each time, and delete_temp_playlist when the user is done with it. Use add_to_queue/add_tracks_to_queue only for a simple fire-and-forget "play these next".
 - Be concise. After finishing a multi-step task, summarize what changed in one or two sentences.`
 
 // Event is one server-sent event pushed to the frontend during a chat turn.
@@ -80,6 +81,9 @@ type TurnOptions struct {
 	Confirm ConfirmFunc // gate for destructive tools
 	Memory  Memory      // user preferences (nil disables the memory tools)
 	Now     time.Time   // current time for context; zero means time.Now()
+	// SkipConfirm returns true when a destructive tool call should run without
+	// asking the user — e.g. it edits a throwaway temp playlist.
+	SkipConfirm func(name string, input json.RawMessage) bool
 }
 
 // Agent holds the Anthropic client and the Spotify tool registry. It is
@@ -277,8 +281,10 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 				continue
 			}
 
-			// Gate destructive tools behind user confirmation.
-			if tool, known := a.tools[tu.Name]; known && tool.Confirm != "" {
+			// Gate destructive tools behind user confirmation, unless the call
+			// is exempt (e.g. editing a throwaway temp playlist).
+			exempt := opts.SkipConfirm != nil && opts.SkipConfirm(tu.Name, tu.Input)
+			if tool, known := a.tools[tu.Name]; known && tool.Confirm != "" && !exempt {
 				approved := opts.Confirm != nil && opts.Confirm(ctx, ConfirmRequest{
 					Name:     tu.Name,
 					Input:    tu.Input,

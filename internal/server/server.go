@@ -21,6 +21,7 @@ import (
 	"github.com/EmpireForge-ef/aux-app/internal/preferences"
 	"github.com/EmpireForge-ef/aux-app/internal/settings"
 	"github.com/EmpireForge-ef/aux-app/internal/spotify"
+	"github.com/EmpireForge-ef/aux-app/internal/tempplaylists"
 )
 
 // Run starts the HTTP server and blocks until ctx is cancelled or the server
@@ -42,6 +43,10 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	if err != nil {
 		return fmt.Errorf("load preferences %s: %w", cfg.PreferencesFile, err)
 	}
+	temps, err := tempplaylists.Load(cfg.TempPlaylists)
+	if err != nil {
+		return fmt.Errorf("load temp playlists %s: %w", cfg.TempPlaylists, err)
+	}
 
 	s := &server{
 		cfg:           cfg,
@@ -49,6 +54,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		settings:      store,
 		chats:         chats,
 		prefs:         prefs,
+		temps:         temps,
 		adminSessions: newSessionStore(),
 		confirms:      make(map[string]chan bool),
 	}
@@ -146,6 +152,7 @@ type server struct {
 	settings      *settings.Store
 	chats         *chat.Store
 	prefs         *preferences.Store
+	temps         *tempplaylists.Store
 	adminSessions *sessionStore
 	oidc          *oidcauth.Authenticator // nil when OIDC is not configured
 

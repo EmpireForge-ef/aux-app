@@ -40,6 +40,7 @@ func All() []Tool {
 	tools = append(tools, episodeTools()...)
 	tools = append(tools, audiobookTools()...)
 	tools = append(tools, chapterTools()...)
+	tools = append(tools, tempTools()...)
 	return tools
 }
 

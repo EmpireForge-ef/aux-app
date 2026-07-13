@@ -38,6 +38,7 @@ ENV AUX_STATIC_DIR=/srv/frontend \
     AUX_SETTINGS_FILE=/data/aux-settings.json \
     AUX_CHATS_DIR=/data/chats \
     AUX_PREFERENCES_FILE=/data/aux-preferences.json \
+    AUX_TEMP_PLAYLISTS_FILE=/data/aux-temp-playlists.json \
     AUX_ADDR=:8080
 
 # Numeric UID so orchestrators can enforce runAsNonRoot without resolving names.

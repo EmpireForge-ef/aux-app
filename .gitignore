@@ -16,6 +16,7 @@ frontend/dist/
 spotify-token.json
 aux-settings.json
 aux-preferences.json
+aux-temp-playlists.json
 
 # Helm packaging output
 aux-*.tgz

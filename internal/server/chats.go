@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/EmpireForge-ef/aux-app/internal/ai"
+	"github.com/EmpireForge-ef/aux-app/internal/aitools"
 	"github.com/EmpireForge-ef/aux-app/internal/chat"
 )
 
@@ -200,9 +201,15 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	messages, chatErr := agent.Chat(r.Context(), c.Messages, req.Message, sp, emit, ai.TurnOptions{
+	// Tool handlers reach the temp-playlist registry through the context.
+	turnCtx := aitools.WithTempPlaylists(r.Context(), s.temps)
+	messages, chatErr := agent.Chat(turnCtx, c.Messages, req.Message, sp, emit, ai.TurnOptions{
 		Confirm: confirm,
 		Memory:  s.prefs,
+		// Skip the confirmation prompt for edits to throwaway temp playlists.
+		SkipConfirm: func(name string, input json.RawMessage) bool {
+			return aitools.IsTempPlaylistEdit(s.temps, name, input)
+		},
 	})
 	if chatErr != nil {
 		log.Printf("chat error (chat %s): %v", req.ChatID, chatErr)

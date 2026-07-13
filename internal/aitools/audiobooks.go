@@ -99,6 +99,7 @@ func audiobookTools() []Tool {
 		},
 		{
 			Name:        "remove_saved_audiobooks",
+			Confirm:     "Remove these audiobooks from your library?",
 			Description: "Remove one or more audiobooks from the current user's library.",
 			Schema:      schema(map[string]any{"ids": strArray("Spotify audiobook IDs to remove.")}, "ids"),
 			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {

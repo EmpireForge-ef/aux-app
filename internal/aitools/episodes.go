@@ -84,6 +84,7 @@ func episodeTools() []Tool {
 		},
 		{
 			Name:        "remove_saved_episodes",
+			Confirm:     "Remove these episodes from your library?",
 			Description: "Remove one or more podcast episodes from the current user's library.",
 			Schema:      schema(map[string]any{"ids": strArray("Spotify episode IDs to remove.")}, "ids"),
 			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {

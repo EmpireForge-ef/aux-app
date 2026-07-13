@@ -10,9 +10,10 @@ artists, and control playback.
 
 ## Features
 
-- **AI control of Spotify** — every method of the wrapper (playlists, library,
-  player, search, artists, albums, shows, episodes, audiobooks, …) is a tool
-  the model can call; responses stream live, including tool activity.
+- **AI control of Spotify** — every working method of the wrapper (playlists,
+  library, player, search, artists, albums, shows, episodes, audiobooks, …) is
+  a tool the model can call; responses stream live, including tool activity.
+  Destructive actions ask for your confirmation first.
 - **Persistent, multi-chat conversations** — a sidebar to start new chats,
   return to old ones, and rename or delete them; full context (including tool
   calls) survives restarts. Each message has a copy button.
@@ -32,12 +33,13 @@ artists, and control playback.
 
 - **Backend** (Go): a cobra/viper CLI (`aux serve`) that serves the frontend,
   handles the Spotify OAuth authorization-code flow, and runs an agent loop
-  against the Anthropic Messages API. Every wrapper method (albums, artists,
-  tracks, playlists, player, search, users, shows, episodes, audiobooks,
-  chapters, categories, markets, plus the deprecated audio-features and
-  recommendations endpoints) is registered as a tool the model can call.
-  Responses stream to the browser as server-sent events, including live
-  tool-call activity.
+  against the Anthropic Messages API. Every working wrapper method (albums,
+  artists, tracks, playlists, player, search, users, shows, episodes,
+  audiobooks, chapters) is registered as a tool the model can call. Responses
+  stream to the browser as server-sent events, including live tool-call
+  activity. Destructive tools (removing saved items, clearing/removing
+  playlist items, unfollowing) are gated behind a user confirmation before
+  they run.
 - **Frontend** (Vite + TypeScript): a chat UI with a "Connect Spotify"
   button, streaming responses, and a sidebar of persistent conversations —
   start new chats and come back to old ones; the full context (including

@@ -99,6 +99,7 @@ func showTools() []Tool {
 		},
 		{
 			Name:        "remove_saved_shows",
+			Confirm:     "Remove these shows from your library?",
 			Description: "Remove one or more podcast shows from the current user's library.",
 			Schema: schema(map[string]any{
 				"ids":    strArray("Spotify show IDs to remove."),

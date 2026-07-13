@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/EmpireForge-ef/aux-app/internal/ai"
 	"github.com/EmpireForge-ef/aux-app/internal/chat"
@@ -174,7 +176,31 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 	mgr, agent := s.clients()
 	sp, _ := mgr.Client() // nil is fine; tools explain how to connect
 
-	messages, chatErr := agent.Chat(r.Context(), c.Messages, req.Message, sp, emit)
+	// confirm gates destructive tools: it emits a confirm event, then blocks
+	// until POST /api/chat/confirm delivers the user's decision (or the
+	// request is cancelled or the confirmation times out — both decline).
+	confirm := func(ctx context.Context, cr ai.ConfirmRequest) bool {
+		id, err := randomToken()
+		if err != nil {
+			return false
+		}
+		ch := make(chan bool, 1)
+		s.addConfirm(id, ch)
+		defer s.removeConfirm(id)
+
+		emit(ai.Event{Type: "confirm", ConfirmID: id, Name: cr.Name, Input: cr.Input, Summary: cr.Question})
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Minute):
+			return false
+		case approved := <-ch:
+			return approved
+		}
+	}
+
+	messages, chatErr := agent.Chat(r.Context(), c.Messages, req.Message, sp, emit, confirm)
 	if chatErr != nil {
 		log.Printf("chat error (chat %s): %v", req.ChatID, chatErr)
 		emit(ai.Event{Type: "error", Message: chatErr.Error()})
@@ -186,4 +212,22 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		log.Printf("persist chat %s failed: %v", req.ChatID, err)
 		emit(ai.Event{Type: "error", Message: "saving the conversation failed: " + err.Error()})
 	}
+}
+
+// handleChatConfirm delivers the user's approve/deny decision for a pending
+// destructive action back to the waiting chat turn.
+func (s *server) handleChatConfirm(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConfirmID string `json:"confirm_id"`
+		Approved  bool   `json:"approved"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ConfirmID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "confirm_id is required"})
+		return
+	}
+	if !s.resolveConfirm(req.ConfirmID, req.Approved) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no pending confirmation (it may have expired)"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

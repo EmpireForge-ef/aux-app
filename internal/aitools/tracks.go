@@ -84,6 +84,7 @@ func trackTools() []Tool {
 		},
 		{
 			Name:        "remove_saved_tracks",
+			Confirm:     "Remove these tracks from your Liked Songs?",
 			Description: "Remove one or more tracks from the current user's library ('Liked Songs').",
 			Schema:      schema(map[string]any{"ids": strArray("Spotify track IDs to remove.")}, "ids"),
 			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {

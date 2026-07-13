@@ -44,6 +44,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		settings:      store,
 		chats:         chats,
 		adminSessions: newSessionStore(),
+		confirms:      make(map[string]chan bool),
 	}
 	if cfg.OIDC.Enabled() {
 		s.oidc = oidcauth.New(oidcauth.Config{
@@ -81,6 +82,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	mux.HandleFunc("GET /api/auth/status", s.requireAuth(s.handleAuthStatus))
 	mux.HandleFunc("POST /api/auth/logout", s.requireAuth(s.handleLogout))
 	mux.HandleFunc("POST /api/chat", s.requireAuth(s.handleChat))
+	mux.HandleFunc("POST /api/chat/confirm", s.requireAuth(s.handleChatConfirm))
 	mux.HandleFunc("GET /api/chats", s.requireAuth(s.handleListChats))
 	mux.HandleFunc("POST /api/chats", s.requireAuth(s.handleCreateChat))
 	mux.HandleFunc("GET /api/chats/{id}", s.requireAuth(s.handleGetChat))
@@ -144,6 +146,39 @@ type server struct {
 	mu      sync.RWMutex
 	spotify *spotify.Manager
 	agent   *ai.Agent
+
+	// confirms tracks destructive-action confirmations awaiting a decision
+	// from POST /api/chat/confirm, keyed by a per-request confirmation ID.
+	confirmMu sync.Mutex
+	confirms  map[string]chan bool
+}
+
+func (s *server) addConfirm(id string, ch chan bool) {
+	s.confirmMu.Lock()
+	s.confirms[id] = ch
+	s.confirmMu.Unlock()
+}
+
+func (s *server) removeConfirm(id string) {
+	s.confirmMu.Lock()
+	delete(s.confirms, id)
+	s.confirmMu.Unlock()
+}
+
+// resolveConfirm delivers a decision to a waiting confirmation, reporting
+// whether one was pending.
+func (s *server) resolveConfirm(id string, approved bool) bool {
+	s.confirmMu.Lock()
+	ch, ok := s.confirms[id]
+	s.confirmMu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- approved: // buffered (cap 1); never blocks
+	default:
+	}
+	return true
 }
 
 // effectiveCredentials merges the persisted admin settings over the

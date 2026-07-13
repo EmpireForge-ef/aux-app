@@ -1,12 +1,13 @@
 import "./style.css";
 
 type AgentEvent = {
-  type: "text" | "tool_use" | "tool_result" | "done" | "error";
+  type: "text" | "tool_use" | "tool_result" | "confirm" | "done" | "error";
   text?: string;
   name?: string;
   input?: unknown;
   ok?: boolean;
   summary?: string;
+  confirm_id?: string;
   stop_reason?: string;
   message?: string;
 };
@@ -182,6 +183,15 @@ function renderApp(session: AdminSession): void {
           <button type="submit" id="settings-save">Save</button>
         </div>
       </form>
+    </dialog>
+    <dialog id="confirm-modal">
+      <h2>Confirm action</h2>
+      <p id="confirm-question"></p>
+      <pre id="confirm-detail"></pre>
+      <div class="modal-actions">
+        <button type="button" id="confirm-cancel">Cancel</button>
+        <button type="button" id="confirm-ok" class="danger">Proceed</button>
+      </div>
     </dialog>
   `;
 
@@ -573,9 +583,47 @@ function addTool(name: string): HTMLDivElement {
 }
 
 // Parses a text/event-stream body from fetch (EventSource cannot POST).
+// askConfirm shows the destructive-action dialog and resolves to the user's
+// choice. detail is a compact preview of what the action affects.
+function askConfirm(question: string, detail: string): Promise<boolean> {
+  const modal = document.querySelector<HTMLDialogElement>("#confirm-modal")!;
+  document.querySelector("#confirm-question")!.textContent = question || "Proceed with this action?";
+  const detailEl = document.querySelector<HTMLPreElement>("#confirm-detail")!;
+  detailEl.textContent = detail;
+  detailEl.style.display = detail ? "block" : "none";
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      modal.close();
+      resolve(ok);
+    };
+    document.querySelector("#confirm-ok")!.addEventListener("click", () => done(true), { once: true });
+    document.querySelector("#confirm-cancel")!.addEventListener("click", () => done(false), { once: true });
+    // Esc / dismissing the dialog counts as cancel.
+    modal.addEventListener("cancel", () => done(false), { once: true });
+    modal.addEventListener("close", () => done(false), { once: true });
+    modal.showModal();
+  });
+}
+
+// summarizeInput renders a short, human preview of a tool's input for the
+// confirmation dialog (e.g. the affected URIs/IDs), truncated.
+function summarizeInput(input: unknown): string {
+  if (input == null) return "";
+  try {
+    const s = typeof input === "string" ? input : JSON.stringify(input);
+    return s.length > 300 ? s.slice(0, 300) + "…" : s;
+  } catch {
+    return "";
+  }
+}
+
 async function streamChat(
   message: string,
-  onEvent: (ev: AgentEvent) => void,
+  onEvent: (ev: AgentEvent) => void | Promise<void>,
 ): Promise<void> {
   const res = await fetch("/api/chat", {
     method: "POST",
@@ -607,11 +655,15 @@ async function streamChat(
         .split("\n")
         .find((line) => line.startsWith("data: "));
       if (!dataLine) continue;
+      let parsed: AgentEvent | null = null;
       try {
-        onEvent(JSON.parse(dataLine.slice(6)) as AgentEvent);
+        parsed = JSON.parse(dataLine.slice(6)) as AgentEvent;
       } catch {
         // ignore malformed frames
       }
+      // Await the handler so a confirmation blocks until the user decides —
+      // the server pauses the turn until we POST the decision.
+      if (parsed) await onEvent(parsed);
     }
   }
 }
@@ -635,7 +687,7 @@ function wireChat(): void {
     let currentTool: HTMLDivElement | null = null;
 
     try {
-      await streamChat(text, (ev) => {
+      await streamChat(text, async (ev) => {
         switch (ev.type) {
           case "text": {
             if (!assistantEl) assistantEl = addMessage("assistant");
@@ -654,6 +706,15 @@ function wireChat(): void {
               currentTool = null;
             }
             break;
+          case "confirm": {
+            const approved = await askConfirm(ev.summary ?? "", summarizeInput(ev.input));
+            await fetch("/api/chat/confirm", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ confirm_id: ev.confirm_id, approved }),
+            });
+            break;
+          }
           case "error":
             addMessage("error", ev.message ?? "something went wrong");
             break;

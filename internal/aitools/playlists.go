@@ -129,6 +129,7 @@ func playlistTools() []Tool {
 		},
 		{
 			Name:        "replace_playlist_items",
+			Confirm:     "Replace the entire playlist contents? This clears the current items.",
 			Description: "Replace the entire contents of a playlist with up to 100 items given as full Spotify URIs (e.g. spotify:track:xyz). Pass an empty list to clear the playlist. Returns the new snapshot ID.",
 			Schema: schema(map[string]any{
 				"id":   str("The Spotify ID of the playlist."),
@@ -184,6 +185,7 @@ func playlistTools() []Tool {
 		},
 		{
 			Name:        "remove_playlist_items",
+			Confirm:     "Remove these items from the playlist?",
 			Description: "Remove all occurrences of up to 100 items from a playlist by their full Spotify URIs (e.g. spotify:track:xyz). Returns the new snapshot ID.",
 			Schema: schema(map[string]any{
 				"id":          str("The Spotify ID of the playlist."),
@@ -222,25 +224,6 @@ func playlistTools() []Tool {
 			},
 		},
 		{
-			Name:        "get_user_playlists",
-			Description: "List the public playlists of any Spotify user by their user ID, paged. Removed from development-mode apps by Spotify in February 2026; use get_current_user_playlists for the connected user instead.",
-			Schema: schema(map[string]any{
-				"user_id": str("The Spotify user ID whose public playlists to list."),
-				"limit":   integer("Maximum number of items to return (default set by Spotify, max usually 50)."),
-				"offset":  integer("Index of the first item to return, for paging."),
-			}, "user_id"),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					pageArgs
-					UserID string `json:"user_id"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				return c.GetUserPlaylists(ctx, args.UserID, args.opts()...)
-			},
-		},
-		{
 			Name:        "create_playlist",
 			Description: "Create a new empty playlist for the current user. Add tracks afterwards with add_items_to_playlist.",
 			Schema: schema(map[string]any{
@@ -265,56 +248,6 @@ func playlistTools() []Tool {
 					Public:        args.Public,
 					Collaborative: args.Collaborative,
 				})
-			},
-		},
-		{
-			Name:        "get_featured_playlists",
-			Description: "Get the playlists featured in Spotify's browse tab plus an accompanying message. Deprecated by Spotify; fails for apps registered after 2024-11-27.",
-			Schema: schema(map[string]any{
-				"locale": str("Optional locale like 'es_MX' for the returned strings."),
-				"limit":  integer("Maximum number of items to return (default set by Spotify, max usually 50)."),
-				"offset": integer("Index of the first item to return, for paging."),
-			}),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					pageArgs
-					Locale string `json:"locale"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				opts := args.opts()
-				if args.Locale != "" {
-					opts = append(opts, spotify.Locale(args.Locale))
-				}
-				message, playlists, err := c.GetFeaturedPlaylists(ctx, opts...)
-				if err != nil {
-					return nil, err
-				}
-				return map[string]any{"message": message, "playlists": playlists}, nil
-			},
-		},
-		{
-			Name:        "get_category_playlists",
-			Description: "Get playlists tagged with a Spotify browse category plus an accompanying message. Deprecated by Spotify; fails for apps registered after 2024-11-27.",
-			Schema: schema(map[string]any{
-				"category_id": str("The Spotify browse category ID."),
-				"limit":       integer("Maximum number of items to return (default set by Spotify, max usually 50)."),
-				"offset":      integer("Index of the first item to return, for paging."),
-			}, "category_id"),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					pageArgs
-					CategoryID string `json:"category_id"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				message, playlists, err := c.GetCategoryPlaylists(ctx, args.CategoryID, args.opts()...)
-				if err != nil {
-					return nil, err
-				}
-				return map[string]any{"message": message, "playlists": playlists}, nil
 			},
 		},
 		{

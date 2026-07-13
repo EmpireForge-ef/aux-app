@@ -68,43 +68,5 @@ func artistTools() []Tool {
 				return c.GetArtistAlbums(ctx, args.ID, opts...)
 			},
 		},
-		{
-			Name:        "get_artist_top_tracks",
-			Description: "Get an artist's top tracks (at most 10). Removed from development-mode apps by Spotify in February 2026; fails with 403 unless the app has extended quota.",
-			Schema: schema(map[string]any{
-				"id":     str("The Spotify ID of the artist."),
-				"market": str("Optional ISO 3166-1 alpha-2 country code."),
-			}, "id"),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					ID     string `json:"id"`
-					Market string `json:"market"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				var opts []spotify.RequestOption
-				if args.Market != "" {
-					opts = append(opts, spotify.Market(args.Market))
-				}
-				return c.GetArtistTopTracks(ctx, args.ID, opts...)
-			},
-		},
-		{
-			Name:        "get_related_artists",
-			Description: "Get artists similar to the given artist. Deprecated by Spotify; fails for apps registered after 2024-11-27.",
-			Schema: schema(map[string]any{
-				"id": str("The Spotify ID of the artist."),
-			}, "id"),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					ID string `json:"id"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				return c.GetRelatedArtists(ctx, args.ID)
-			},
-		},
 	}
 }

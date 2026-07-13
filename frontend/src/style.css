@@ -613,3 +613,34 @@ form button:disabled {
     width: 92vw;
   }
 }
+
+/* Destructive-action confirmation dialog. */
+#confirm-modal h2 {
+  margin: 0 0 0.6rem;
+  font-size: 1.1rem;
+}
+
+#confirm-question {
+  margin: 0 0 0.6rem;
+  line-height: 1.4;
+}
+
+#confirm-detail {
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin: 0 0 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 8rem;
+  overflow-y: auto;
+}
+
+.modal-actions .danger {
+  background: var(--error);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}

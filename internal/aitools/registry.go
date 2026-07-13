@@ -20,6 +20,10 @@ type Tool struct {
 	Description string
 	Schema      anthropic.ToolInputSchemaParam
 	Handler     func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error)
+	// Confirm, when non-empty, marks the tool as destructive: the agent must
+	// obtain the user's confirmation before running it. The string is the
+	// question shown to the user.
+	Confirm string
 }
 
 // All returns every tool, covering the wrapper's complete method surface.
@@ -36,10 +40,6 @@ func All() []Tool {
 	tools = append(tools, episodeTools()...)
 	tools = append(tools, audiobookTools()...)
 	tools = append(tools, chapterTools()...)
-	tools = append(tools, categoryTools()...)
-	tools = append(tools, marketTools()...)
-	tools = append(tools, audioTools()...)
-	tools = append(tools, recommendationTools()...)
 	return tools
 }
 

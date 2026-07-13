@@ -32,22 +32,35 @@ Guidelines:
 - List endpoints are paged; fetch more pages with limit/offset when the user needs complete data.
 - Playback tools require Spotify Premium and an active or named device; if playback fails, check available devices first.
 - This app runs against Spotify's development-mode API (February 2026). Playlist contents are only readable for playlists the user owns or collaborates on — Spotify withholds the contents of other playlists, including its own editorial and algorithmic ones. Search returns at most 10 results per type per call (page with offset). Some catalog fields (track/artist popularity, user email/country) are withheld.
-- Tools marked as removed for development-mode apps (new releases, categories, artist top tracks, other users' profiles/playlists, markets, follow checks on playlists) and the 2024-deprecated ones (recommendations, audio features, related artists, featured/category playlists) will fail; if one does, say so and use a working alternative such as search, the user's saved/top tracks, or followed artists.
 - A 403 Forbidden is an app-level restriction, never a scope problem — do not advise re-authorizing to fix one.
-- Before destructive bulk changes (clearing or replacing a whole playlist, mass-unfollowing), state what you are about to do in one sentence, then do it.
+- Destructive actions (removing saved tracks/albums/episodes/shows/audiobooks, removing or replacing playlist items, unfollowing) are gated: the app automatically asks the user to approve each one before it runs, so you do not need to ask for confirmation in text — just call the tool and briefly state what you are doing. If the user declines, acknowledge it and move on. Non-destructive actions (adding items, creating playlists, saving) run without a prompt.
 - Be concise. After finishing a multi-step task, summarize what changed in one or two sentences.`
 
 // Event is one server-sent event pushed to the frontend during a chat turn.
 type Event struct {
-	Type       string          `json:"type"` // text | tool_use | tool_result | done | error
+	Type       string          `json:"type"` // text | tool_use | tool_result | confirm | done | error
 	Text       string          `json:"text,omitempty"`
 	Name       string          `json:"name,omitempty"`
 	Input      json.RawMessage `json:"input,omitempty"`
 	OK         *bool           `json:"ok,omitempty"`
 	Summary    string          `json:"summary,omitempty"`
+	ConfirmID  string          `json:"confirm_id,omitempty"`
 	StopReason string          `json:"stop_reason,omitempty"`
 	Message    string          `json:"message,omitempty"`
 }
+
+// ConfirmRequest describes a destructive tool call awaiting the user's
+// approval.
+type ConfirmRequest struct {
+	Name     string
+	Input    json.RawMessage
+	Question string
+}
+
+// ConfirmFunc asks the user to approve a destructive action, returning true to
+// proceed. It should honour ctx cancellation. A nil ConfirmFunc means no
+// confirmation channel is available, and destructive actions are declined.
+type ConfirmFunc func(ctx context.Context, req ConfirmRequest) bool
 
 // Agent holds the Anthropic client and the Spotify tool registry. It is
 // stateless: conversation history is passed in and returned by Chat, so the
@@ -109,8 +122,8 @@ func (a *Agent) ListModels(ctx context.Context) ([]ModelInfo, error) {
 // way. It returns the updated history — also when it fails partway, so the
 // caller can persist whatever the model already did. sp may be nil when the
 // user has not connected Spotify yet; tools then return an instructive error
-// to the model.
-func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text string, sp *spotify.Client, emit func(Event)) ([]anthropic.MessageParam, error) {
+// to the model. Destructive tools are gated through confirm before they run.
+func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text string, sp *spotify.Client, emit func(Event), confirm ConfirmFunc) ([]anthropic.MessageParam, error) {
 	messages := append(history, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
 
 	for turn := 0; turn < maxTurns; turn++ {
@@ -156,6 +169,22 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 				continue
 			}
 			emit(Event{Type: "tool_use", Name: tu.Name, Input: tu.Input})
+
+			// Gate destructive tools behind user confirmation.
+			if tool, known := a.tools[tu.Name]; known && tool.Confirm != "" {
+				approved := confirm != nil && confirm(ctx, ConfirmRequest{
+					Name:     tu.Name,
+					Input:    tu.Input,
+					Question: tool.Confirm,
+				})
+				if !approved {
+					declined := false
+					emit(Event{Type: "tool_result", Name: tu.Name, OK: &declined, Summary: "declined by the user"})
+					results = append(results, anthropic.NewToolResultBlock(tu.ID,
+						"The user declined this action, so it was not performed. Acknowledge this and continue without it.", false))
+					continue
+				}
+			}
 
 			out, err := a.runTool(ctx, tu.Name, tu.Input, sp)
 			success := err == nil

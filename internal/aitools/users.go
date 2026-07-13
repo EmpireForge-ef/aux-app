@@ -57,20 +57,6 @@ func userTools() []Tool {
 			},
 		},
 		{
-			Name:        "get_user",
-			Description: "Get the public profile of any Spotify user by their user ID. Removed from development-mode apps by Spotify in February 2026; fails with 403 unless the app has extended quota.",
-			Schema:      schema(map[string]any{"user_id": str("The Spotify user ID.")}, "user_id"),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					UserID string `json:"user_id"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				return c.GetUser(ctx, args.UserID)
-			},
-		},
-		{
 			Name:        "get_top_artists",
 			Description: "List the current user's most listened-to artists over a chosen time window, paged.",
 			Schema:      schema(topProps()),
@@ -117,6 +103,7 @@ func userTools() []Tool {
 		},
 		{
 			Name:        "unfollow_playlist",
+			Confirm:     "Unfollow (remove) this playlist?",
 			Description: "Make the current user unfollow a playlist.",
 			Schema:      schema(map[string]any{"playlist_id": str("The Spotify ID of the playlist to unfollow.")}, "playlist_id"),
 			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
@@ -177,6 +164,7 @@ func userTools() []Tool {
 		},
 		{
 			Name:        "unfollow",
+			Confirm:     "Unfollow these artists?",
 			Description: "Make the current user unfollow up to 50 artists. Unfollowing users is no longer supported by the Spotify API.",
 			Schema:      schema(followTypeProps(), "type", "ids"),
 			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
@@ -206,20 +194,6 @@ func userTools() []Tool {
 					return nil, err
 				}
 				return c.IsFollowing(ctx, spotify.FollowType(args.Type), args.IDs...)
-			},
-		},
-		{
-			Name:        "current_user_follows_playlist",
-			Description: "Check whether the current user follows the given playlist. Returns a single boolean. Removed from development-mode apps by Spotify in February 2026; fails with 403 unless the app has extended quota.",
-			Schema:      schema(map[string]any{"playlist_id": str("The Spotify ID of the playlist to check.")}, "playlist_id"),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					PlaylistID string `json:"playlist_id"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				return c.CurrentUserFollowsPlaylist(ctx, args.PlaylistID)
 			},
 		},
 	}

@@ -22,8 +22,8 @@ artists, and control playback.
   without a restart.
 - **Model selection** — fetch the current list of models from the Anthropic
   API and pick one (plus a max-tokens cap) to trade quality for cost.
-- **Deploy-ready** — non-root container, GitLab CI with versioned publishing,
-  and a hardened Helm chart.
+- **Deploy-ready** — non-root container, GitHub Actions with versioned GHCR
+  publishing, and a hardened Helm chart.
 
 ## How it works
 
@@ -193,9 +193,10 @@ For a production-style run, `./build.sh` builds both parts (frontend into
 
 The image runs as a non-root user (UID 10001) and needs no privileges — it
 works with a read-only root filesystem as long as `/data` is writable.
+Released images are published to `ghcr.io/empireforge-ef/aux-app`; build
+locally with `docker build -t aux .` for development.
 
 ```sh
-docker build -t aux .
 docker run -p 8080:8080 -v aux-data:/data \
   --read-only --user 10001:10001 \
   -e AUX_ADMIN_PASSWORD=... \
@@ -203,24 +204,37 @@ docker run -p 8080:8080 -v aux-data:/data \
   -e AUX_SPOTIFY_CLIENT_SECRET=... \
   -e AUX_ANTHROPIC_API_KEY=... \
   -e AUX_PUBLIC_URL=http://127.0.0.1:8080 \
-  aux
+  ghcr.io/empireforge-ef/aux-app:latest
 ```
 
 ## CI / releases
 
-`.gitlab-ci.yml` runs gofmt/vet/tests, the frontend build, and a Helm lint on
-every push. Tagging `vX.Y.Z` publishes:
+CI runs on **GitHub Actions** (`.github/workflows/ci.yml`); pipelines are
+visible under the repository's **Actions** tab. Every push and pull request
+runs gofmt, `go vet`, `go test`, the frontend build, and a Helm lint.
 
-- the container image to the GitLab registry as `:X.Y.Z` and `:latest`, and
-- the Helm chart to the project's GitLab Helm package registry
-  (`stable` channel) with matching chart/app version.
+Pushing a `vX.Y.Z` tag additionally publishes to the GitHub Container
+Registry (GHCR):
+
+- the container image at
+  [`ghcr.io/empireforge-ef/aux-app`](https://github.com/EmpireForge-ef/aux-app/pkgs/container/aux-app),
+  tagged `:X.Y.Z` and `:latest`, and
+- the Helm chart as an OCI artifact at `oci://ghcr.io/empireforge-ef/charts/aux`,
+  with matching chart/app version.
+
+Both are pushed with the workflow's built-in `GITHUB_TOKEN` — no extra
+secrets to configure. GHCR packages start **private**: make them public in
+the package settings, or add `imagePullSecrets` (and a registry credential)
+for a private pull.
 
 ## Helm
 
+The chart is an OCI artifact on GHCR, so no `helm repo add` is needed —
+install straight from the registry (the image repository already defaults to
+`ghcr.io/empireforge-ef/aux-app`):
+
 ```sh
-helm repo add aux https://gitlab.example.com/api/v4/projects/<id>/packages/helm/stable
-helm install aux aux/aux \
-  --set image.repository=registry.example.com/you/aux \
+helm install aux oci://ghcr.io/empireforge-ef/charts/aux --version X.Y.Z \
   --set config.publicUrl=https://aux.example.com \
   --set ingress.enabled=true --set ingress.host=aux.example.com \
   --set secrets.adminPassword=... \
@@ -239,7 +253,7 @@ capabilities dropped, `RuntimeDefault` seccomp) — override via
 To back the login with Keycloak (or another OIDC provider), enable SSO:
 
 ```sh
-helm install aux aux/aux \
+helm install aux oci://ghcr.io/empireforge-ef/charts/aux --version X.Y.Z \
   ... \
   --set oidc.enabled=true \
   --set oidc.issuerUrl=https://keycloak.example.com/realms/aux \

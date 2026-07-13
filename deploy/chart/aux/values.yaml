@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: registry.gitlab.com/CHANGE-ME/aux
+  repository: ghcr.io/empireforge-ef/aux-app
   tag: ""            # defaults to the chart appVersion
   pullPolicy: IfNotPresent
 

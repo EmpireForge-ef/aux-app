@@ -1,9 +1,9 @@
 # Aux
 
 Aux is a web app that puts an AI in charge of your Spotify account. You chat
-with the assistant in a browser; the assistant uses the complete
+with the assistant in a browser; the assistant drives the
 [spotify-go-wrapper](https://github.com/EmpireForge-ef/spotify-go-wrapper)
-API surface — exposed as tools via the
+API — exposed as tools via the
 [Anthropic Go SDK](https://github.com/anthropics/anthropic-sdk-go) — to
 search the catalog, build and edit playlists, manage your library, follow
 artists, and control playback.
@@ -274,6 +274,11 @@ helm install aux oci://ghcr.io/empireforge-ef/charts/aux --version X.Y.Z \
   --set secrets.oidcClientSecret=... \
   --set oidc.allowedEmails=you@example.com
 ```
+
+## Roadmap
+
+Larger deferred ideas (a real recommendation engine, snapshot-based undo,
+auto-generated cover art, …) are tracked in [plan.md](plan.md).
 
 ## License
 

@@ -14,7 +14,7 @@
 
         backend = pkgs.buildGoModule {
           pname = "aux-backend";
-          version = "0.1.0";
+          version = "0.2.0";
           # Only Go sources — frontend changes shouldn't rebuild the backend.
           src = lib.fileset.toSource {
             root = ./.;
@@ -32,11 +32,11 @@
 
         frontend = pkgs.buildNpmPackage {
           pname = "aux-frontend";
-          version = "0.1.0";
+          version = "0.2.0";
           src = ./frontend;
           # Update with `nix run nixpkgs#prefetch-npm-deps -- frontend/package-lock.json`
           # whenever package-lock.json changes.
-          npmDepsHash = "sha256-Cnk98dF90GPsPmynkooep/P7achhaNtpBxrR/3NO36Q=";
+          npmDepsHash = "sha256-CxaJgEjpq5jWfBWdOEKPpb9DShKMPgADAlsC/ObKvsA=";
           installPhase = ''
             runHook preInstall
             cp -r dist $out

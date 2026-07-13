@@ -39,6 +39,7 @@ Guidelines:
 - Spotify no longer offers a recommendations endpoint to this app, so build "vibe" or "songs like X" playlists yourself: search by genre/mood/year, draw on the user's top and saved tracks and their followed/searched artists' catalogs, then dedupe. When you recommend, briefly say why a track fits ("because you listen to X").
 - You have a small persistent memory of the user's music preferences via the remember_preference / list_preferences / forget_preference tools. When the user states a durable taste (favourite genres, artists to avoid, no explicit lyrics, preferred era), save it so future chats stay personalised. Their saved preferences are provided to you each turn — honour them unless the user overrides them for a specific request.
 - The Spotify queue is add-only: once a track is queued it cannot be removed, reordered, or cleared. So when the user wants a queue they can edit (change songs, reorder, remove), do NOT use add_to_queue/add_tracks_to_queue — instead create_temp_playlist, add the tracks to it, and play it (play with context_uri set to the temp playlist's uri). Editing a temp playlist needs no confirmation. Reuse the temp playlist you already made in this conversation rather than creating a new one each time, and delete_temp_playlist when the user is done with it. Use add_to_queue/add_tracks_to_queue only for a simple fire-and-forget "play these next".
+- Don't recommend the same songs every time. Each turn you are given a list of recently queued/added track URIs; when you generate a new selection (a vibe playlist, a queue, "more like this"), exclude those URIs and choose fresh tracks, so the user gets variety across requests. Only repeat a specific track if the user explicitly asks for it. When you need more variety, widen the search (different artists, years, sub-genres) or draw on get_recently_played and the user's library.
 - Be concise. After finishing a multi-step task, summarize what changed in one or two sentences.`
 
 // Event is one server-sent event pushed to the frontend during a chat turn.
@@ -76,15 +77,27 @@ type Memory interface {
 	Clear() error                // remove everything
 }
 
+// History remembers recently queued/added track URIs so the agent can avoid
+// recommending the same songs over and over.
+type History interface {
+	Recent(n int) []string // most-recently-added URIs, newest first
+	Add(uris []string)     // record URIs as just used
+}
+
 // TurnOptions carries the per-turn extras beyond the conversation itself.
 type TurnOptions struct {
 	Confirm ConfirmFunc // gate for destructive tools
 	Memory  Memory      // user preferences (nil disables the memory tools)
 	Now     time.Time   // current time for context; zero means time.Now()
+	History History     // recently-used tracks, to avoid repetition (nil disables)
 	// SkipConfirm returns true when a destructive tool call should run without
 	// asking the user — e.g. it edits a throwaway temp playlist.
 	SkipConfirm func(name string, input json.RawMessage) bool
 }
+
+// recentInjectN is how many recently-used track URIs are shown to the model
+// each turn so it can avoid repeating them.
+const recentInjectN = 60
 
 // Agent holds the Anthropic client and the Spotify tool registry. It is
 // stateless: conversation history is passed in and returned by Chat, so the
@@ -307,6 +320,14 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 			}
 			emit(Event{Type: "tool_result", Name: tu.Name, OK: &success, Summary: summarize(out)})
 			results = append(results, anthropic.NewToolResultBlock(tu.ID, out, !success))
+
+			// Remember tracks the model just queued/added so it doesn't repeat
+			// them in future selections.
+			if success && opts.History != nil {
+				if uris := aitools.AddedTrackURIs(tu.Name, tu.Input); len(uris) > 0 {
+					opts.History.Add(uris)
+				}
+			}
 		}
 		if len(results) == 0 {
 			return messages, errors.New("model stopped for tool use but produced no tool calls")
@@ -353,6 +374,12 @@ func turnContext(opts TurnOptions) string {
 		if prefs := opts.Memory.Text(); prefs != "" {
 			b.WriteString("\n\nThe user's saved music preferences (apply them unless they say otherwise):\n")
 			b.WriteString(prefs)
+		}
+	}
+	if opts.History != nil {
+		if recent := opts.History.Recent(recentInjectN); len(recent) > 0 {
+			b.WriteString("\n\nRecently queued/added tracks — do NOT queue or add these again when generating new selections (playlists, queues, \"more like this\") unless the user explicitly asks to repeat a specific one. Pick different tracks:\n")
+			b.WriteString(strings.Join(recent, " "))
 		}
 	}
 	return b.String()

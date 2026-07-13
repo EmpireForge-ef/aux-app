@@ -16,9 +16,10 @@ artists, and control playback.
   Tool results are slimmed to the essentials (name, artist, uri, …) to stay
   fast and token-cheap. Destructive actions ask for your confirmation first.
 - **Personalised & context-aware** — the AI keeps a small cross-chat memory of
-  your music preferences (favourite genres, no-gos, era) and knows the current
-  time, so "a playlist like last time" or "something for a Monday morning"
-  just works.
+  your music preferences (favourite genres, no-gos, era), remembers the tracks
+  it recently queued so it doesn't recommend the same songs over and over, and
+  knows the current time — so "a playlist like last time" or "something fresh
+  for a Monday morning" just works.
 - **Persistent, multi-chat conversations** — a sidebar to start new chats,
   return to old ones, and rename or delete them; full context (including tool
   calls) survives restarts. Each message has a copy button.
@@ -145,6 +146,8 @@ of precedence. Each setting lists its environment variable, the equivalent
 - **`AUX_TEMP_PLAYLISTS_FILE`** (`temp_playlists_file`, default
   `aux-temp-playlists.json`) — tracks the throwaway "queue" playlists the AI
   creates, whose edits skip the confirmation prompt.
+- **`AUX_HISTORY_FILE`** (`history_file`, default `aux-history.json`) — remembers
+  recently queued/added tracks so the AI stops recommending the same songs.
 
 ## Admin login & runtime settings
 

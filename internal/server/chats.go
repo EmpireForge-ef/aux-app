@@ -206,6 +206,7 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 	messages, chatErr := agent.Chat(turnCtx, c.Messages, req.Message, sp, emit, ai.TurnOptions{
 		Confirm: confirm,
 		Memory:  s.prefs,
+		History: s.history,
 		// Skip the confirmation prompt for edits to throwaway temp playlists.
 		SkipConfirm: func(name string, input json.RawMessage) bool {
 			return aitools.IsTempPlaylistEdit(s.temps, name, input)

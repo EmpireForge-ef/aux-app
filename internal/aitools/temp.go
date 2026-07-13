@@ -84,6 +84,29 @@ func tempTools() []Tool {
 	}
 }
 
+// AddedTrackURIs returns the track/episode URIs a tool call adds to the queue
+// or a playlist, so they can be recorded as "recently used" and not repeated.
+// Non-adding tools return nil.
+func AddedTrackURIs(name string, input json.RawMessage) []string {
+	switch name {
+	case "add_to_queue":
+		var a struct {
+			URI string `json:"uri"`
+		}
+		if json.Unmarshal(input, &a) == nil && a.URI != "" {
+			return []string{a.URI}
+		}
+	case "add_tracks_to_queue", "add_items_to_playlist", "replace_playlist_items":
+		var a struct {
+			URIs []string `json:"uris"`
+		}
+		if json.Unmarshal(input, &a) == nil {
+			return a.URIs
+		}
+	}
+	return nil
+}
+
 // IsTempPlaylistEdit reports whether a destructive tool call targets a tracked
 // temp playlist, in which case the confirmation gate can be skipped.
 func IsTempPlaylistEdit(tp TempPlaylists, name string, input json.RawMessage) bool {

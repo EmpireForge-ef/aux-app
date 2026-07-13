@@ -31,3 +31,22 @@ func TestIsTempPlaylistEdit(t *testing.T) {
 		t.Error("nil registry should never exempt")
 	}
 }
+
+func TestAddedTrackURIs(t *testing.T) {
+	cases := []struct {
+		name, input string
+		wantLen     int
+	}{
+		{"add_to_queue", `{"uri":"spotify:track:x"}`, 1},
+		{"add_tracks_to_queue", `{"uris":["a","b","c"]}`, 3},
+		{"add_items_to_playlist", `{"id":"p","uris":["a","b"]}`, 2},
+		{"replace_playlist_items", `{"id":"p","uris":["a"]}`, 1},
+		{"get_track", `{"id":"x"}`, 0}, // not an add tool
+		{"remove_playlist_items", `{"id":"p","uris":["a"]}`, 0},
+	}
+	for _, c := range cases {
+		if got := AddedTrackURIs(c.name, []byte(c.input)); len(got) != c.wantLen {
+			t.Errorf("AddedTrackURIs(%s) len = %d, want %d", c.name, len(got), c.wantLen)
+		}
+	}
+}

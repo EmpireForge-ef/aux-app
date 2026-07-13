@@ -65,6 +65,7 @@ type Config struct {
 	ChatsDir        string    `mapstructure:"chats_dir"`
 	PreferencesFile string    `mapstructure:"preferences_file"`
 	TempPlaylists   string    `mapstructure:"temp_playlists_file"`
+	HistoryFile     string    `mapstructure:"history_file"`
 	Spotify         Spotify   `mapstructure:"spotify"`
 	Anthropic       Anthropic `mapstructure:"anthropic"`
 	Admin           Admin     `mapstructure:"admin"`
@@ -87,6 +88,7 @@ func New(cfgFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("chats_dir", "chats")
 	v.SetDefault("preferences_file", "aux-preferences.json")
 	v.SetDefault("temp_playlists_file", "aux-temp-playlists.json")
+	v.SetDefault("history_file", "aux-history.json")
 	v.SetDefault("admin.password", "")
 	v.SetDefault("anthropic.model", "claude-opus-4-8")
 	v.SetDefault("anthropic.max_tokens", 8192)

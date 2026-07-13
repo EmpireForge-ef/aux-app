@@ -17,6 +17,7 @@ import (
 	"github.com/EmpireForge-ef/aux-app/internal/ai"
 	"github.com/EmpireForge-ef/aux-app/internal/chat"
 	"github.com/EmpireForge-ef/aux-app/internal/config"
+	"github.com/EmpireForge-ef/aux-app/internal/history"
 	"github.com/EmpireForge-ef/aux-app/internal/oidcauth"
 	"github.com/EmpireForge-ef/aux-app/internal/preferences"
 	"github.com/EmpireForge-ef/aux-app/internal/settings"
@@ -47,6 +48,10 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	if err != nil {
 		return fmt.Errorf("load temp playlists %s: %w", cfg.TempPlaylists, err)
 	}
+	hist, err := history.Load(cfg.HistoryFile)
+	if err != nil {
+		return fmt.Errorf("load history %s: %w", cfg.HistoryFile, err)
+	}
 
 	s := &server{
 		cfg:           cfg,
@@ -55,6 +60,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		chats:         chats,
 		prefs:         prefs,
 		temps:         temps,
+		history:       hist,
 		adminSessions: newSessionStore(),
 		confirms:      make(map[string]chan bool),
 	}
@@ -153,6 +159,7 @@ type server struct {
 	chats         *chat.Store
 	prefs         *preferences.Store
 	temps         *tempplaylists.Store
+	history       *history.Store
 	adminSessions *sessionStore
 	oidc          *oidcauth.Authenticator // nil when OIDC is not configured
 

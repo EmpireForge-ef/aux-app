@@ -18,6 +18,7 @@ aux-settings.json
 aux-preferences.json
 aux-temp-playlists.json
 aux-history.json
+aux-playlist-cache.json
 
 # Helm packaging output
 aux-*.tgz

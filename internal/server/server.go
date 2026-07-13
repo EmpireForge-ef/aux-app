@@ -19,6 +19,7 @@ import (
 	"github.com/EmpireForge-ef/aux-app/internal/config"
 	"github.com/EmpireForge-ef/aux-app/internal/history"
 	"github.com/EmpireForge-ef/aux-app/internal/oidcauth"
+	"github.com/EmpireForge-ef/aux-app/internal/playlistcache"
 	"github.com/EmpireForge-ef/aux-app/internal/preferences"
 	"github.com/EmpireForge-ef/aux-app/internal/settings"
 	"github.com/EmpireForge-ef/aux-app/internal/spotify"
@@ -52,6 +53,10 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	if err != nil {
 		return fmt.Errorf("load history %s: %w", cfg.HistoryFile, err)
 	}
+	plcache, err := playlistcache.Load(cfg.PlaylistCache)
+	if err != nil {
+		return fmt.Errorf("load playlist cache %s: %w", cfg.PlaylistCache, err)
+	}
 
 	s := &server{
 		cfg:           cfg,
@@ -61,6 +66,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		prefs:         prefs,
 		temps:         temps,
 		history:       hist,
+		plcache:       plcache,
 		adminSessions: newSessionStore(),
 		confirms:      make(map[string]chan bool),
 	}
@@ -160,6 +166,7 @@ type server struct {
 	prefs         *preferences.Store
 	temps         *tempplaylists.Store
 	history       *history.Store
+	plcache       *playlistcache.Store
 	adminSessions *sessionStore
 	oidc          *oidcauth.Authenticator // nil when OIDC is not configured
 

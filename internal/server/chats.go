@@ -201,8 +201,10 @@ func (s *server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Tool handlers reach the temp-playlist registry through the context.
+	// Tool handlers reach the temp-playlist registry and playlist cache
+	// through the context.
 	turnCtx := aitools.WithTempPlaylists(r.Context(), s.temps)
+	turnCtx = aitools.WithPlaylistCache(turnCtx, s.plcache)
 	messages, chatErr := agent.Chat(turnCtx, c.Messages, req.Message, sp, emit, ai.TurnOptions{
 		Confirm: confirm,
 		Memory:  s.prefs,

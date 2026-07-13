@@ -148,6 +148,9 @@ of precedence. Each setting lists its environment variable, the equivalent
   creates, whose edits skip the confirmation prompt.
 - **`AUX_HISTORY_FILE`** (`history_file`, default `aux-history.json`) — remembers
   recently queued/added tracks so the AI stops recommending the same songs.
+- **`AUX_PLAYLIST_CACHE_FILE`** (`playlist_cache_file`, default
+  `aux-playlist-cache.json`) — caches playlist contents (keyed by snapshot) so
+  the AI can skip duplicates on add without re-fetching the whole playlist.
 
 ## Admin login & runtime settings
 

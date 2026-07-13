@@ -11,7 +11,7 @@ import (
 )
 
 // maxEntries caps how many recent URIs are kept, dropping the oldest.
-const maxEntries = 300
+const maxEntries = 500
 
 // Store is a persisted, recency-ordered, de-duplicated list of track URIs
 // (most recent last).

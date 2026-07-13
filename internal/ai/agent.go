@@ -39,7 +39,8 @@ Guidelines:
 - Spotify no longer offers a recommendations endpoint to this app, so build "vibe" or "songs like X" playlists yourself: search by genre/mood/year, draw on the user's top and saved tracks and their followed/searched artists' catalogs, then dedupe. When you recommend, briefly say why a track fits ("because you listen to X").
 - You have a small persistent memory of the user's music preferences via the remember_preference / list_preferences / forget_preference tools. When the user states a durable taste (favourite genres, artists to avoid, no explicit lyrics, preferred era), save it so future chats stay personalised. Their saved preferences are provided to you each turn — honour them unless the user overrides them for a specific request.
 - The Spotify queue is add-only: once a track is queued it cannot be removed, reordered, or cleared. So when the user wants a queue they can edit (change songs, reorder, remove), do NOT use add_to_queue/add_tracks_to_queue — instead create_temp_playlist, add the tracks to it, and play it (play with context_uri set to the temp playlist's uri). Editing a temp playlist needs no confirmation. Reuse the temp playlist you already made in this conversation rather than creating a new one each time, and delete_temp_playlist when the user is done with it. Use add_to_queue/add_tracks_to_queue only for a simple fire-and-forget "play these next".
-- Don't recommend the same songs every time. Each turn you are given a list of recently queued/added track URIs; when you generate a new selection (a vibe playlist, a queue, "more like this"), exclude those URIs and choose fresh tracks, so the user gets variety across requests. Only repeat a specific track if the user explicitly asks for it. When you need more variety, widen the search (different artists, years, sub-genres) or draw on get_recently_played and the user's library.
+- Don't recommend the same songs every time. Each turn you are given a list of recently queued/added track URIs; when you generate a new selection (a vibe playlist, a queue, "more like this"), exclude those URIs and choose fresh tracks, so the user gets variety across requests. Only repeat a specific track if the user explicitly asks for it. Use list_recent_tracks to see a larger window when building a big selection. When you need more variety, widen the search (different artists, years, sub-genres) or draw on get_recently_played and the user's library.
+- Adapt how strictly you avoid repeats to the user's taste, stored as the 'repeat_tolerance' preference: 'low' means they want constant novelty (avoid recent tracks strictly), 'high' means they enjoy hearing favourites again (repeating is fine, weight familiar tracks in). If it isn't set, infer it from feedback — e.g. "I keep hearing the same songs" means low tolerance, "play my favourites more" means high — and save it with remember_preference so it sticks.
 - Be concise. After finishing a multi-step task, summarize what changed in one or two sentences.`
 
 // Event is one server-sent event pushed to the frontend during a chat turn.
@@ -125,8 +126,42 @@ func New(apiKey, model string, maxTokens int64) *Agent {
 		model:      anthropic.Model(model),
 		maxTokens:  maxTokens,
 		tools:      byName,
-		toolParams: append(aitools.Params(registry), memoryToolParams...),
+		toolParams: append(append(aitools.Params(registry), memoryToolParams...), historyToolParams...),
 	}
+}
+
+// historyToolParams is the built-in tool for querying the recently-used-track
+// history on demand (beyond the compact list injected each turn).
+var historyToolParams = []anthropic.ToolUnionParam{
+	{OfTool: &anthropic.ToolParam{
+		Name:        "list_recent_tracks",
+		Description: anthropic.String("Return the track URIs you recently queued or added (most recent first). You already receive the newest ones automatically each turn; call this to see a larger window when building a big selection and you want to avoid repeats across more tracks. URIs only, so it's cheap."),
+		InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{
+			"limit": map[string]any{"type": "integer", "description": "How many recent URIs to return (default 150)."},
+		}},
+	}},
+}
+
+// runHistoryTool handles the built-in history tool; handled is false for any
+// other tool name.
+func runHistoryTool(name string, input json.RawMessage, hist History) (handled bool, out string, err error) {
+	if name != "list_recent_tracks" {
+		return false, "", nil
+	}
+	if hist == nil {
+		return true, `{"items":[]}`, nil
+	}
+	var args struct {
+		Limit int `json:"limit"`
+	}
+	if len(input) > 0 {
+		_ = json.Unmarshal(input, &args)
+	}
+	if args.Limit <= 0 {
+		args.Limit = 150
+	}
+	data, _ := json.Marshal(map[string]any{"items": hist.Recent(args.Limit)})
+	return true, string(data), nil
 }
 
 // memoryToolParams are built-in, non-Spotify tools for persisting user
@@ -283,11 +318,21 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 			}
 			emit(Event{Type: "tool_use", Name: tu.Name, Input: tu.Input})
 
-			// Built-in preference tools are handled locally, not via Spotify.
+			// Built-in preference / history tools are handled locally, not via
+			// Spotify.
 			if handled, out, memErr := runMemoryTool(tu.Name, tu.Input, opts.Memory); handled {
 				success := memErr == nil
 				if memErr != nil {
 					out = "Error: " + memErr.Error()
+				}
+				emit(Event{Type: "tool_result", Name: tu.Name, OK: &success, Summary: summarize(out)})
+				results = append(results, anthropic.NewToolResultBlock(tu.ID, out, !success))
+				continue
+			}
+			if handled, out, histErr := runHistoryTool(tu.Name, tu.Input, opts.History); handled {
+				success := histErr == nil
+				if histErr != nil {
+					out = "Error: " + histErr.Error()
 				}
 				emit(Event{Type: "tool_result", Name: tu.Name, OK: &success, Summary: summarize(out)})
 				results = append(results, anthropic.NewToolResultBlock(tu.ID, out, !success))

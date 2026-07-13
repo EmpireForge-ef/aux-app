@@ -1,0 +1,13 @@
+# direnv
+.direnv/
+
+# Nix build output
+result
+result-*
+
+# Go
+/bin/
+
+# Frontend
+node_modules/
+frontend/dist/

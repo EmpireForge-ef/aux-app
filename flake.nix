@@ -24,8 +24,8 @@
               ./flake.lock
             ]);
           };
-          # Set to a real hash once dependencies are added and go.sum exists.
-          vendorHash = null;
+          # Recompute with `nix build .#backend` whenever go.sum changes.
+          vendorHash = "sha256-BMyBFR7pwI5i0iB4wpQVio4L+r80deY5fbq5E5cz758=";
           subPackages = [ "cmd/server" ];
           meta.mainProgram = "server";
         };

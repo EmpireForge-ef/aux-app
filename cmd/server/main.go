@@ -1,31 +1,64 @@
+// Command server runs the Aux backend: a web frontend plus an AI agent that
+// drives the full Spotify Web API on the user's behalf.
 package main
 
 import (
-	"log"
-	"net/http"
+	"fmt"
 	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/EmpireForge-ef/aux-app/internal/config"
+	"github.com/EmpireForge-ef/aux-app/internal/server"
 )
 
+// version is injected at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
-	addr := os.Getenv("AUX_ADDR")
-	if addr == "" {
-		addr = ":8080"
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func newRootCmd() *cobra.Command {
+	var cfgFile string
+
+	root := &cobra.Command{
+		Use:           "aux",
+		Short:         "Aux — AI-driven Spotify control with a web frontend",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	root.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ./aux.yaml or /etc/aux/aux.yaml)")
+
+	serve := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the HTTP server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.New(cfgFile, cmd.Flags())
+			if err != nil {
+				return err
+			}
+			return server.Run(cmd.Context(), cfg, version)
+		},
+	}
+	serve.Flags().String("addr", ":8080", "listen address")
+	serve.Flags().String("static-dir", "", "directory with the built frontend (overrides static_dir)")
+
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print the version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version)
+		},
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	// Serve the built frontend; AUX_STATIC_DIR is set by the Nix wrapper,
-	// during development it falls back to the local Vite build output.
-	staticDir := os.Getenv("AUX_STATIC_DIR")
-	if staticDir == "" {
-		staticDir = "frontend/dist"
-	}
-	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
-
-	log.Printf("aux listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	root.AddCommand(serve, versionCmd)
+	// Running the binary with no subcommand starts the server, which keeps
+	// the container entrypoint trivial.
+	root.RunE = serve.RunE
+	root.Flags().AddFlagSet(serve.Flags())
+	return root
 }

@@ -1,0 +1,94 @@
+replicaCount: 1
+
+image:
+  repository: registry.gitlab.com/CHANGE-ME/aux
+  tag: ""            # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: aux.example.com
+  tls:
+    enabled: false
+    secretName: ""
+
+config:
+  # Public base URL of the app; the Spotify redirect URL is derived from it
+  # (<publicUrl>/api/auth/callback) and must be registered in the Spotify app.
+  # Spotify requires HTTPS redirect URIs (plain HTTP is only allowed on the
+  # explicit loopback IPs 127.0.0.1 / [::1]; 'localhost' is rejected), so a
+  # cluster deployment behind an ingress should always use https://.
+  publicUrl: "https://aux.example.com"
+  anthropicModel: "claude-opus-4-8"
+  anthropicMaxTokens: 8192
+
+# Optional OpenID Connect single sign-on (e.g. Keycloak). When enabled the
+# login screen offers an SSO button; the OIDC client secret goes in the
+# Secret (see secrets.oidcClientSecret) since it is sensitive. The provider's
+# redirect URI is <config.publicUrl>/api/admin/oidc/callback.
+oidc:
+  enabled: false
+  issuerUrl: ""      # e.g. https://keycloak.example.com/realms/aux
+  clientId: ""
+  scopes: ""         # defaults to "openid profile email"
+  allowedEmails: ""  # optional comma-separated allowlist of verified emails
+
+# The container runs as a non-root user (UID 10001, baked into the image) and
+# needs no privileges. fsGroup makes the persistent volume writable by it.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  capabilities:
+    drop:
+      - ALL
+
+secrets:
+  # Name of an existing Secret with keys:
+  #   AUX_ADMIN_PASSWORD, AUX_SPOTIFY_CLIENT_ID, AUX_SPOTIFY_CLIENT_SECRET,
+  #   AUX_ANTHROPIC_API_KEY, AUX_OIDC_CLIENT_SECRET
+  existingSecret: ""
+  # Or set the values here and the chart creates the Secret itself.
+  # adminPassword protects the whole app. It may be left empty ONLY when OIDC
+  # is enabled; with neither, Aux runs UNPROTECTED.
+  # The Spotify/Anthropic credentials may be left empty and set later
+  # through the admin settings UI (persisted on the /data volume).
+  adminPassword: ""
+  spotifyClientId: ""
+  spotifyClientSecret: ""
+  anthropicApiKey: ""
+  oidcClientSecret: ""  # OIDC client secret (only if oidc.enabled)
+
+# Persists /data (the saved Spotify OAuth token) across pod restarts.
+persistence:
+  enabled: true
+  size: 16Mi
+  storageClass: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

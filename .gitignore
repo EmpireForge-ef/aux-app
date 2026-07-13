@@ -11,3 +11,15 @@ result-*
 # Frontend
 node_modules/
 frontend/dist/
+
+# Spotify OAuth token (secret)
+spotify-token.json
+
+# Helm packaging output
+aux-*.tgz
+
+# Local environment (secrets)
+.env
+
+# Local persisted chats
+/chats/

@@ -7,6 +7,17 @@ image:
 
 imagePullSecrets: []
 
+# Aux does not talk to the Kubernetes API, so it runs under a dedicated
+# ServiceAccount with the API token not mounted by default (least privilege).
+serviceAccount:
+  create: true
+  # Name of the ServiceAccount to use. Empty defaults to the release fullname
+  # when create is true, or "default" when create is false.
+  name: ""
+  annotations: {}
+  # Mount the API token into the pod. Leave false unless something needs it.
+  automount: false
+
 service:
   type: ClusterIP
   port: 8080

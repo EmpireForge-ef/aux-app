@@ -25,3 +25,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "aux.fullname" . -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "aux.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "aux.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}

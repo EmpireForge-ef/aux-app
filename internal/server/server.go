@@ -84,6 +84,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	mux.HandleFunc("GET /api/chats", s.requireAuth(s.handleListChats))
 	mux.HandleFunc("POST /api/chats", s.requireAuth(s.handleCreateChat))
 	mux.HandleFunc("GET /api/chats/{id}", s.requireAuth(s.handleGetChat))
+	mux.HandleFunc("PATCH /api/chats/{id}", s.requireAuth(s.handleRenameChat))
 	mux.HandleFunc("DELETE /api/chats/{id}", s.requireAuth(s.handleDeleteChat))
 	mux.Handle("/", http.FileServer(http.Dir(cfg.StaticDir)))
 

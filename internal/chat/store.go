@@ -130,11 +130,16 @@ func (s *Store) Get(id string) (*Chat, error) {
 
 // Save persists a chat, bumping its UpdatedAt.
 func (s *Store) Save(c *Chat) error {
+	c.UpdatedAt = time.Now().UTC()
+	return s.write(c)
+}
+
+// write atomically persists a chat as-is, without touching UpdatedAt.
+func (s *Store) write(c *Chat) error {
 	p, err := s.path(c.ID)
 	if err != nil {
 		return err
 	}
-	c.UpdatedAt = time.Now().UTC()
 	data, err := json.Marshal(c)
 	if err != nil {
 		return err
@@ -144,6 +149,20 @@ func (s *Store) Save(c *Chat) error {
 		return err
 	}
 	return os.Rename(tmp, p)
+}
+
+// Rename changes a chat's title, preserving its position in the list (it does
+// not bump UpdatedAt). Returns the updated metadata.
+func (s *Store) Rename(id, title string) (Meta, error) {
+	c, err := s.Get(id)
+	if err != nil {
+		return Meta{}, err
+	}
+	c.Title = title
+	if err := s.write(c); err != nil {
+		return Meta{}, err
+	}
+	return c.Meta, nil
 }
 
 // Delete removes a chat.

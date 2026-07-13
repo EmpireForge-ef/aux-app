@@ -92,22 +92,38 @@ body {
   white-space: nowrap;
 }
 
-.chat-item .chat-delete {
+.chat-item .chat-action {
   background: none;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  padding: 0.4rem 0.5rem;
+  padding: 0.4rem 0.4rem;
   font-size: 0.75rem;
   visibility: hidden;
 }
 
-.chat-item:hover .chat-delete {
+.chat-item:hover .chat-action {
   visibility: visible;
+}
+
+.chat-item .chat-rename:hover {
+  color: var(--accent);
 }
 
 .chat-item .chat-delete:hover {
   color: var(--error);
+}
+
+.chat-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 0.45rem 0.5rem;
+  margin: 0 0.2rem;
 }
 
 .chat-pane {
@@ -115,12 +131,6 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}
-
-@media (max-width: 700px) {
-  #sidebar {
-    width: 150px;
-  }
 }
 
 header {
@@ -136,8 +146,13 @@ header h1 {
   margin: 0;
 }
 
-header h1 span {
+header h1 .brand {
   color: var(--accent);
+}
+
+/* The hamburger is desktop-hidden; the mobile media query reveals it. */
+.menu-btn {
+  display: none;
 }
 
 .auth {
@@ -175,6 +190,12 @@ header h1 span {
   padding: 0.7rem 1rem;
   border-radius: 12px;
   max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.msg-text {
   white-space: pre-wrap;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -182,12 +203,14 @@ header h1 span {
 
 .msg.user {
   align-self: flex-end;
+  align-items: flex-end;
   background: var(--accent-dark);
   color: #eaf2ff;
 }
 
 .msg.assistant {
   align-self: flex-start;
+  align-items: flex-start;
   background: var(--panel-2);
 }
 
@@ -196,6 +219,28 @@ header h1 span {
   background: transparent;
   color: var(--error);
   font-size: 0.85rem;
+}
+
+.copy-btn {
+  align-self: flex-end;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 6px;
+  transition: opacity 0.12s ease;
+}
+
+.msg:hover .copy-btn,
+.copy-btn:focus-visible {
+  opacity: 0.7;
+}
+
+.copy-btn:hover {
+  opacity: 1;
 }
 
 .tool {
@@ -473,4 +518,98 @@ form button {
 form button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Off-canvas sidebar backdrop (mobile only). */
+#sidebar-backdrop {
+  display: none;
+}
+
+/* ---- Mobile / small screens -------------------------------------------- */
+@media (max-width: 720px) {
+  #app {
+    padding: 0 0.6rem;
+  }
+
+  /* Header: show the hamburger, hide the tagline, let it wrap compactly. */
+  header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .menu-btn {
+    display: inline-flex;
+    order: 0;
+  }
+
+  header h1 {
+    order: 1;
+    font-size: 1.05rem;
+  }
+
+  header h1 .subtitle {
+    display: none;
+  }
+
+  .header-actions {
+    order: 2;
+    margin-left: auto;
+  }
+
+  /* Auth status drops to its own full-width line below the title row. */
+  .auth {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  /* The sidebar becomes an off-canvas drawer toggled by the hamburger. */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 80%;
+    max-width: 300px;
+    z-index: 30;
+    background: var(--panel);
+    border-right: 1px solid var(--panel-2);
+    padding: 1rem 0.8rem;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  #sidebar.open {
+    transform: translateX(0);
+  }
+
+  #sidebar-backdrop.visible {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  /* No hover on touch: keep chat actions and the copy button visible. */
+  .chat-item .chat-action {
+    visibility: visible;
+  }
+
+  .copy-btn {
+    opacity: 0.6;
+  }
+
+  /* Roomier tap targets and a touch of extra width for messages. */
+  .msg {
+    max-width: 90%;
+  }
+
+  .chat-item .chat-title {
+    padding: 0.6rem;
+  }
+
+  dialog {
+    min-width: 0;
+    width: 92vw;
+  }
 }

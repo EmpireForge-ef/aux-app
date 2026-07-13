@@ -13,8 +13,11 @@ artists, and control playback.
 - **AI control of Spotify** — every method of the wrapper (playlists, library,
   player, search, artists, albums, shows, episodes, audiobooks, …) is a tool
   the model can call; responses stream live, including tool activity.
-- **Persistent, multi-chat conversations** — a sidebar to start new chats and
-  return to old ones; full context (including tool calls) survives restarts.
+- **Persistent, multi-chat conversations** — a sidebar to start new chats,
+  return to old ones, and rename or delete them; full context (including tool
+  calls) survives restarts. Each message has a copy button.
+- **Works on mobile** — responsive layout with an off-canvas chat drawer, so
+  it's usable on a phone as well as a desktop.
 - **Admin login** — protect the whole app with a password and/or OpenID
   Connect single sign-on (Keycloak-compatible).
 - **Runtime settings UI** — set the Spotify credentials, Anthropic API key,

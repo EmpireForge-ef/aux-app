@@ -55,6 +55,42 @@ func (s *server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleRenameChat sets a chat's title.
+func (s *server) handleRenameChat(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	title := strings.Join(strings.Fields(req.Title), " ")
+	if title == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title must not be empty"})
+		return
+	}
+	if len([]rune(title)) > 120 {
+		title = string([]rune(title)[:120])
+	}
+
+	// Serialise with any in-flight message turn on the same chat.
+	lock := s.chats.Lock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	meta, err := s.chats.Rename(id, title)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, chat.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, meta)
+}
+
 // handleChat runs one user turn in a persisted chat and streams the agent's
 // response as server-sent events (event names mirror ai.Event.Type: text,
 // tool_use, tool_result, done, error). The updated conversation — model

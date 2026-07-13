@@ -131,14 +131,16 @@ function renderLogin(session: AdminSession): void {
 function renderApp(session: AdminSession): void {
   app.innerHTML = `
     <header>
-      <h1><span>Aux</span> — AI for your Spotify</h1>
-      <div class="auth" id="auth">checking…</div>
+      <button id="sidebar-toggle" class="icon-btn menu-btn" title="Chats" aria-label="Toggle chat list">☰</button>
+      <h1><span class="brand">Aux</span><span class="subtitle"> — AI for your Spotify</span></h1>
       <div class="header-actions">
-        <button id="settings-btn" class="icon-btn" title="Settings">⚙ Settings</button>
-        ${session.auth_disabled ? "" : `<button id="admin-logout" class="icon-btn" title="Log out">⏻ Log out</button>`}
+        <button id="settings-btn" class="icon-btn" title="Settings">⚙<span class="btn-label"> Settings</span></button>
+        ${session.auth_disabled ? "" : `<button id="admin-logout" class="icon-btn" title="Log out">⏻<span class="btn-label"> Log out</span></button>`}
       </div>
+      <div class="auth" id="auth">checking…</div>
     </header>
     <div class="workspace">
+      <div id="sidebar-backdrop"></div>
       <aside id="sidebar">
         <button id="new-chat">+ New chat</button>
         <nav id="chat-list"></nav>
@@ -187,6 +189,7 @@ function renderApp(session: AdminSession): void {
   wireChat();
   wireSettings();
   wireChatList();
+  wireSidebar();
 
   const authError = new URLSearchParams(window.location.search).get("auth_error");
   if (authError) {
@@ -198,6 +201,23 @@ function renderApp(session: AdminSession): void {
     await fetch("/api/admin/logout", { method: "POST" });
     boot();
   });
+}
+
+// --- sidebar drawer (mobile) -------------------------------------------------
+
+// setDrawer opens/closes the off-canvas sidebar on small screens. Harmless on
+// desktop, where the sidebar is always visible and the backdrop is hidden.
+function setDrawer(open: boolean): void {
+  document.querySelector("#sidebar")?.classList.toggle("open", open);
+  document.querySelector("#sidebar-backdrop")?.classList.toggle("visible", open);
+}
+
+function wireSidebar(): void {
+  const sidebar = document.querySelector<HTMLElement>("#sidebar");
+  document.querySelector("#sidebar-toggle")?.addEventListener("click", () => {
+    setDrawer(!sidebar?.classList.contains("open"));
+  });
+  document.querySelector("#sidebar-backdrop")?.addEventListener("click", () => setDrawer(false));
 }
 
 async function wireAuth(): Promise<void> {
@@ -264,10 +284,21 @@ async function refreshChatList(): Promise<ChatMeta[]> {
     title.title = meta.title;
     title.addEventListener("click", () => selectChat(meta.id));
 
+    const rename = document.createElement("button");
+    rename.className = "chat-action chat-rename";
+    rename.textContent = "✎";
+    rename.title = "Rename chat";
+    rename.setAttribute("aria-label", "Rename chat");
+    rename.addEventListener("click", (e) => {
+      e.stopPropagation();
+      startRename(title, meta);
+    });
+
     const del = document.createElement("button");
-    del.className = "chat-delete";
+    del.className = "chat-action chat-delete";
     del.textContent = "✕";
     del.title = "Delete chat";
+    del.setAttribute("aria-label", "Delete chat");
     del.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (!confirm(`Delete "${meta.title}"?`)) return;
@@ -283,7 +314,7 @@ async function refreshChatList(): Promise<ChatMeta[]> {
       }
     });
 
-    item.append(title, del);
+    item.append(title, rename, del);
     list.appendChild(item);
   }
   return data.chats;
@@ -325,7 +356,47 @@ async function selectChat(id: string): Promise<void> {
     }
   }
   await refreshChatList(); // re-render highlights with the new active chat
+  setDrawer(false); // close the mobile drawer after picking a chat
   document.querySelector<HTMLInputElement>("#chat-input")?.focus();
+}
+
+// startRename swaps a chat's title button for an inline text field. Enter or
+// blur saves via PATCH; Escape cancels. The list is refreshed either way.
+function startRename(titleBtn: HTMLButtonElement, meta: ChatMeta): void {
+  const input = document.createElement("input");
+  input.className = "chat-rename-input";
+  input.value = meta.title;
+  titleBtn.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const finish = async (save: boolean) => {
+    if (settled) return;
+    settled = true;
+    const next = input.value.trim();
+    if (save && next && next !== meta.title) {
+      await fetch(`/api/chats/${meta.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: next }),
+      });
+    }
+    await refreshChatList();
+  };
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+  // Clicks inside the input shouldn't bubble to the chat item.
+  input.addEventListener("click", (e) => e.stopPropagation());
 }
 
 // --- settings modal ---------------------------------------------------------
@@ -434,11 +505,58 @@ function wireSettings(): void {
 
 // --- chat -------------------------------------------------------------------
 
+// copyText copies to the clipboard, falling back to a hidden textarea for
+// non-secure contexts (plain HTTP on a LAN, where navigator.clipboard is
+// unavailable). Returns whether it succeeded.
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+// addMessage appends a chat bubble. User and assistant bubbles carry a copy
+// button; errors don't. Returns the container; its text lives in `.msg-text`.
 function addMessage(cls: string, text = ""): HTMLDivElement {
   const messagesEl = document.querySelector<HTMLDivElement>("#messages")!;
   const div = document.createElement("div");
   div.className = `msg ${cls}`;
-  div.textContent = text;
+
+  const textEl = document.createElement("div");
+  textEl.className = "msg-text";
+  textEl.textContent = text;
+  div.appendChild(textEl);
+
+  if (cls === "user" || cls === "assistant") {
+    const copy = document.createElement("button");
+    copy.className = "copy-btn";
+    copy.textContent = "⧉ Copy";
+    copy.title = "Copy message";
+    copy.addEventListener("click", async () => {
+      const ok = await copyText(textEl.textContent ?? "");
+      copy.textContent = ok ? "✓ Copied" : "Copy failed";
+      setTimeout(() => (copy.textContent = "⧉ Copy"), 1500);
+    });
+    div.appendChild(copy);
+  }
+
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return div;
@@ -519,11 +637,13 @@ function wireChat(): void {
     try {
       await streamChat(text, (ev) => {
         switch (ev.type) {
-          case "text":
+          case "text": {
             if (!assistantEl) assistantEl = addMessage("assistant");
-            assistantEl.textContent += ev.text ?? "";
+            const textEl = assistantEl.querySelector<HTMLElement>(".msg-text")!;
+            textEl.textContent += ev.text ?? "";
             messagesEl.scrollTop = messagesEl.scrollHeight;
             break;
+          }
           case "tool_use":
             assistantEl = null; // next text goes into a fresh bubble
             currentTool = addTool(ev.name ?? "tool");

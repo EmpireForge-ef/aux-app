@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -60,6 +61,15 @@ func (o OIDC) Enabled() bool {
 	return o.IssuerURL != "" && o.ClientID != ""
 }
 
+// Listening configures the passive listening-profile collector.
+type Listening struct {
+	// Enabled turns the background poller on (default true). It no-ops until
+	// the user connects Spotify.
+	Enabled bool `mapstructure:"enabled"`
+	// PollInterval is how often recent plays are recorded (default 20m).
+	PollInterval time.Duration `mapstructure:"poll_interval"`
+}
+
 type Config struct {
 	Addr      string `mapstructure:"addr"`
 	StaticDir string `mapstructure:"static_dir"`
@@ -79,11 +89,16 @@ type Config struct {
 	// Timezone is an IANA name (e.g. "Europe/Berlin") used to render the
 	// current time given to the AI each turn. Empty means the server's local
 	// zone. The admin settings UI can override it at runtime.
-	Timezone  string    `mapstructure:"timezone"`
+	Timezone string `mapstructure:"timezone"`
+	// Location is a "lat,lon" pair or a place name used for weather tagging in
+	// the listening profile. Empty disables the weather dimension. Also
+	// settable in the admin UI.
+	Location  string    `mapstructure:"location"`
 	Spotify   Spotify   `mapstructure:"spotify"`
 	Anthropic Anthropic `mapstructure:"anthropic"`
 	Admin     Admin     `mapstructure:"admin"`
 	OIDC      OIDC      `mapstructure:"oidc"`
+	Listening Listening `mapstructure:"listening"`
 }
 
 // New builds a viper instance with defaults, env bindings, and an optional
@@ -106,6 +121,9 @@ func New(cfgFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("history_file", "aux-history.json")
 	v.SetDefault("playlist_cache_file", "aux-playlist-cache.json")
 	v.SetDefault("timezone", "")
+	v.SetDefault("location", "")
+	v.SetDefault("listening.enabled", true)
+	v.SetDefault("listening.poll_interval", "20m")
 	v.SetDefault("admin.password", "")
 	v.SetDefault("anthropic.model", "claude-opus-4-8")
 	v.SetDefault("anthropic.max_tokens", 8192)

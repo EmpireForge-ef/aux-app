@@ -38,6 +38,7 @@ Guidelines:
 - Destructive actions (removing saved tracks/albums/episodes/shows/audiobooks, removing or replacing playlist items, unfollowing) are gated: the app automatically asks the user to approve each one before it runs, so you do not need to ask for confirmation in text — just call the tool and briefly state what you are doing. If the user declines, acknowledge it and move on. Non-destructive actions (adding items, creating playlists, saving) run without a prompt.
 - Spotify no longer offers a recommendations endpoint to this app, so build "vibe" or "songs like X" playlists yourself: search by genre/mood/year, draw on the user's top and saved tracks and their followed/searched artists' catalogs, then dedupe. When you recommend, briefly say why a track fits ("because you listen to X").
 - You have a small persistent memory of the user's music preferences via the remember_preference / list_preferences / forget_preference tools. When the user states a durable taste (favourite genres, artists to avoid, no explicit lyrics, preferred era), save it so future chats stay personalised. Their saved preferences are provided to you each turn — honour them unless the user overrides them for a specific request.
+- Aux passively learns what the user actually listens to. Call get_listening_profile to see their real habits — top genres/artists/tracks broken down by time of day, weekday vs weekend, and weather. Use it to ground vibe playlists, queues, and "something for right now" requests in what they genuinely play (e.g. check their current part-of-day or rainy-day pattern before choosing), and combine it with their stated preferences. If it reports no data yet, fall back to preferences, top/saved tracks, and search as usual. The profile reflects real plays, so weight it when the user asks for something that fits their taste or the moment.
 - The Spotify queue is add-only: once a track is queued it cannot be removed, reordered, or cleared. So when the user wants a queue they can edit (change songs, reorder, remove), do NOT use add_to_queue/add_tracks_to_queue — instead create_temp_playlist, add the tracks to it, and play it (play with context_uri set to the temp playlist's uri). Editing a temp playlist needs no confirmation. Reuse the temp playlist you already made in this conversation rather than creating a new one each time, and delete_temp_playlist when the user is done with it. Use add_to_queue/add_tracks_to_queue only for a simple fire-and-forget "play these next".
 - Don't recommend the same songs every time. Each turn you are given a list of recently queued/added track URIs; when you generate a new selection (a vibe playlist, a queue, "more like this"), exclude those URIs and choose fresh tracks, so the user gets variety across requests. Only repeat a specific track if the user explicitly asks for it. Use list_recent_tracks to see a larger window when building a big selection. When you need more variety, widen the search (different artists, years, sub-genres) or draw on get_recently_played and the user's library.
 - Adapt how strictly you avoid repeats to the user's taste, stored as the 'repeat_tolerance' preference: 'low' means they want constant novelty (avoid recent tracks strictly), 'high' means they enjoy hearing favourites again (repeating is fine, weight familiar tracks in). If it isn't set, infer it from feedback — e.g. "I keep hearing the same songs" means low tolerance, "play my favourites more" means high — and save it with remember_preference so it sticks.
@@ -89,12 +90,19 @@ type History interface {
 	Add(uris []string)     // record URIs as just used
 }
 
+// Listening exposes the passively-learned listening profile (what the user
+// plays by time of day, weekday/weekend, and weather) as a JSON summary.
+type Listening interface {
+	ProfileJSON(partOfDay string, weekend *bool, weather string, days int) (string, error)
+}
+
 // TurnOptions carries the per-turn extras beyond the conversation itself.
 type TurnOptions struct {
-	Confirm ConfirmFunc // gate for destructive tools
-	Memory  Memory      // user preferences (nil disables the memory tools)
-	Now     time.Time   // current time for context; zero means time.Now()
-	History History     // recently-used tracks, to avoid repetition (nil disables)
+	Confirm   ConfirmFunc // gate for destructive tools
+	Memory    Memory      // user preferences (nil disables the memory tools)
+	Now       time.Time   // current time for context; zero means time.Now()
+	History   History     // recently-used tracks, to avoid repetition (nil disables)
+	Listening Listening   // passively-learned listening profile (nil disables the tool)
 	// SkipConfirm returns true when a destructive tool call should run without
 	// asking the user — e.g. it edits a throwaway temp playlist.
 	SkipConfirm func(name string, input json.RawMessage) bool
@@ -127,7 +135,7 @@ func New(apiKey, model string, maxTokens, contextLimit int64) *Agent {
 	for _, t := range registry {
 		byName[t.Name] = t
 	}
-	toolParams := append(append(aitools.Params(registry), memoryToolParams...), historyToolParams...)
+	toolParams := append(append(append(aitools.Params(registry), memoryToolParams...), historyToolParams...), listeningToolParams...)
 	// Cache the (static, large) tool definitions: one breakpoint on the last
 	// tool caches the whole block so it isn't re-billed on every request.
 	if n := len(toolParams); n > 0 && toolParams[n-1].OfTool != nil {
@@ -155,6 +163,46 @@ var historyToolParams = []anthropic.ToolUnionParam{
 			"limit": map[string]any{"type": "integer", "description": "How many recent URIs to return (default 150)."},
 		}},
 	}},
+}
+
+// listeningToolParams is the built-in tool for querying the passively-learned
+// listening profile.
+var listeningToolParams = []anthropic.ToolUnionParam{
+	{OfTool: &anthropic.ToolParam{
+		Name:        "get_listening_profile",
+		Description: anthropic.String("Look up what the user ACTUALLY listens to, learned passively from their play history and tagged with time-of-day, weekday/weekend, and weather. Call this when building a vibe playlist or queue, or making recommendations, to ground them in the user's real habits — e.g. check their weekend-evening or rainy-day patterns first. With no arguments you get an overall summary plus a per-part-of-day genre breakdown. Optionally filter to a slice. Returns top genres, artists, and tracks with play counts. It is cheap; prefer it over guessing."),
+		InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{
+			"part_of_day": map[string]any{"type": "string", "enum": []string{"morning", "afternoon", "evening", "night"}, "description": "Restrict to a part of the day (local time)."},
+			"weekend":     map[string]any{"type": "boolean", "description": "true = weekends only, false = weekdays only."},
+			"weather":     map[string]any{"type": "string", "description": "Restrict to a weather condition, e.g. 'rain', 'clear', 'clouds', 'snow'."},
+			"days":        map[string]any{"type": "integer", "description": "Only consider plays from the last N days."},
+		}},
+	}},
+}
+
+// runListeningTool handles the built-in listening-profile tool; handled is
+// false for any other tool name.
+func runListeningTool(name string, input json.RawMessage, l Listening) (handled bool, out string, err error) {
+	if name != "get_listening_profile" {
+		return false, "", nil
+	}
+	if l == nil {
+		return true, `{"note":"the listening profile is not available"}`, nil
+	}
+	var args struct {
+		PartOfDay string `json:"part_of_day"`
+		Weekend   *bool  `json:"weekend"`
+		Weather   string `json:"weather"`
+		Days      int    `json:"days"`
+	}
+	if len(input) > 0 {
+		_ = json.Unmarshal(input, &args)
+	}
+	out, err = l.ProfileJSON(args.PartOfDay, args.Weekend, args.Weather, args.Days)
+	if err != nil {
+		return true, "", err
+	}
+	return true, out, nil
 }
 
 // runHistoryTool handles the built-in history tool; handled is false for any
@@ -369,6 +417,15 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 				success := histErr == nil
 				if histErr != nil {
 					out = "Error: " + histErr.Error()
+				}
+				emit(Event{Type: "tool_result", Name: tu.Name, OK: &success, Summary: summarize(out)})
+				results = append(results, anthropic.NewToolResultBlock(tu.ID, out, !success))
+				continue
+			}
+			if handled, out, lErr := runListeningTool(tu.Name, tu.Input, opts.Listening); handled {
+				success := lErr == nil
+				if lErr != nil {
+					out = "Error: " + lErr.Error()
 				}
 				emit(Event{Type: "tool_result", Name: tu.Name, OK: &success, Summary: summarize(out)})
 				results = append(results, anthropic.NewToolResultBlock(tu.ID, out, !success))

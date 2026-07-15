@@ -60,6 +60,7 @@ type Settings = {
   anthropic_model: string;
   anthropic_max_tokens: number;
   timezone: string;
+  location: string;
 };
 
 type ModelInfo = { id: string; display_name: string; max_tokens: number };
@@ -226,7 +227,10 @@ function renderApp(session: AdminSession): void {
         <label>Timezone
           <select id="set-timezone"></select>
         </label>
-        <p class="hint">Secrets stay blurred: leave a field empty to keep its current value. Pick a cheaper model or lower the token cap to save cost. The timezone sets the clock the AI reads. Changes apply immediately.</p>
+        <label>Location (for weather)
+          <input id="set-location" type="text" autocomplete="off" placeholder="e.g. Berlin or 52.52,13.40" />
+        </label>
+        <p class="hint">Secrets stay blurred: leave a field empty to keep its current value. Pick a cheaper model or lower the token cap to save cost. The timezone sets the clock the AI reads; the location adds weather to your listening profile. Changes apply immediately.</p>
         <p class="error-text" id="settings-error"></p>
         <div class="modal-actions">
           <button type="button" id="settings-cancel">Cancel</button>
@@ -498,6 +502,7 @@ function wireSettings(): void {
   const fetchModels = document.querySelector<HTMLButtonElement>("#fetch-models")!;
   const maxTokens = document.querySelector<HTMLInputElement>("#set-max-tokens")!;
   const timezone = document.querySelector<HTMLSelectElement>("#set-timezone")!;
+  const location = document.querySelector<HTMLInputElement>("#set-location")!;
 
   // Ensures `tz` is present as an option and selected; adds it (e.g. a
   // configured zone that isn't in the shortlist) if missing.
@@ -534,6 +539,7 @@ function wireSettings(): void {
       ensureModelOption(s.anthropic_model);
       maxTokens.value = String(s.anthropic_max_tokens || "");
       ensureTimezoneOption(s.timezone ?? "");
+      location.value = s.location ?? "";
       modal.showModal();
     } catch {
       errEl.textContent = "could not load settings";
@@ -582,6 +588,7 @@ function wireSettings(): void {
     const tokens = parseInt(maxTokens.value, 10);
     if (Number.isFinite(tokens) && tokens > 0) body.anthropic_max_tokens = tokens;
     if (timezone.value) body.timezone = timezone.value;
+    if (location.value.trim()) body.location = location.value.trim();
     if (Object.keys(body).length === 0) {
       modal.close();
       return;

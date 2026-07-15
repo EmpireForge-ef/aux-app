@@ -14,17 +14,21 @@ import (
 	"sync"
 	"time"
 
+	spotifyapi "github.com/EmpireForge-ef/spotify-go-wrapper"
+
 	"github.com/EmpireForge-ef/aux-app/internal/ai"
 	"github.com/EmpireForge-ef/aux-app/internal/chat"
 	"github.com/EmpireForge-ef/aux-app/internal/config"
 	"github.com/EmpireForge-ef/aux-app/internal/db"
 	"github.com/EmpireForge-ef/aux-app/internal/history"
+	"github.com/EmpireForge-ef/aux-app/internal/listening"
 	"github.com/EmpireForge-ef/aux-app/internal/oidcauth"
 	"github.com/EmpireForge-ef/aux-app/internal/playlistcache"
 	"github.com/EmpireForge-ef/aux-app/internal/preferences"
 	"github.com/EmpireForge-ef/aux-app/internal/settings"
 	"github.com/EmpireForge-ef/aux-app/internal/spotify"
 	"github.com/EmpireForge-ef/aux-app/internal/tempplaylists"
+	"github.com/EmpireForge-ef/aux-app/internal/weather"
 )
 
 // Run starts the HTTP server and blocks until ctx is cancelled or the server
@@ -63,6 +67,10 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	if err != nil {
 		return fmt.Errorf("init playlist cache: %w", err)
 	}
+	lstore, err := listening.New(gdb)
+	if err != nil {
+		return fmt.Errorf("init listening: %w", err)
+	}
 	importLegacyJSON(cfg, store, chats, prefs, temps, hist, plcache)
 
 	s := &server{
@@ -74,6 +82,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		temps:         temps,
 		history:       hist,
 		plcache:       plcache,
+		listening:     lstore,
 		adminSessions: newSessionStore(),
 		confirms:      make(map[string]chan bool),
 		runs:          make(map[string]*run),
@@ -95,6 +104,18 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	}
 	if id, _, _ := s.effectiveCredentials(); id == "" {
 		log.Printf("warning: no Spotify client ID configured — set it via AUX_SPOTIFY_CLIENT_ID or the admin settings UI")
+	}
+
+	// The listening poller records recent plays in the background to build the
+	// user's music profile. It no-ops until Spotify is connected.
+	if cfg.Listening.Enabled {
+		poller := listening.NewPoller(
+			lstore, weather.New(), cfg.Listening.PollInterval,
+			func() (*spotifyapi.Client, bool) { mgr, _ := s.clients(); return mgr.Client() },
+			s.effectiveLocation, s.turnLocation,
+		)
+		go poller.Run(ctx)
+		log.Printf("listening profile enabled (poll every %s)", cfg.Listening.PollInterval)
 	}
 
 	mux := http.NewServeMux()
@@ -177,6 +198,7 @@ type server struct {
 	temps         *tempplaylists.Store
 	history       *history.Store
 	plcache       *playlistcache.Store
+	listening     *listening.Store
 	adminSessions *sessionStore
 	oidc          *oidcauth.Authenticator // nil when OIDC is not configured
 
@@ -249,6 +271,15 @@ func (s *server) effectiveTimezone() string {
 		return tz
 	}
 	return s.cfg.Timezone
+}
+
+// effectiveLocation merges the persisted location setting over the
+// environment/file configuration; empty disables the weather dimension.
+func (s *server) effectiveLocation() string {
+	if l := s.settings.Get().Location; l != "" {
+		return l
+	}
+	return s.cfg.Location
 }
 
 // turnLocation resolves the effective timezone to a *time.Location, or nil

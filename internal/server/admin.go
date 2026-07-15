@@ -176,6 +176,7 @@ func (s *server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"anthropic_model":       model,
 		"anthropic_max_tokens":  maxTokens,
 		"timezone":              s.effectiveTimezone(),
+		"location":              s.effectiveLocation(),
 	})
 }
 

@@ -30,6 +30,12 @@ artists, and control playback.
   whenever you want.
 - **Configurable timezone** — pick your timezone in the settings so the clock
   the AI reads ("something for a Friday night") matches your local time.
+- **Learns your listening habits** — a background poller passively records what
+  you play and when, tagging each play with time-of-day, weekday/weekend, and
+  (with a location set) the weather. The AI reads this profile via a
+  `get_listening_profile` tool to ground recommendations in what you *actually*
+  listen to — your rainy-morning genres, your weekend-night artists — instead
+  of just what you've told it.
 - **Efficient & long-lived chats** — Anthropic prompt caching is used for the
   tool definitions, system prompt, and running conversation, so repeated
   requests are much cheaper and faster. When a chat grows near the model's
@@ -62,7 +68,8 @@ artists, and control playback.
   auto-summarised so they never exceed the model's context window.
 - **Storage** (PostgreSQL via GORM): chats (with the full message history and
   transcript as JSONB), admin settings, preferences, recent-track history,
-  temp playlists, and the playlist cache are all persisted to PostgreSQL. The
+  temp playlists, the playlist cache, and the passive listening profile
+  (play events with time/weather context) are all persisted to PostgreSQL. The
   schema is created (and migrated) automatically on startup, and any
   pre-database JSON files are imported once.
 - **Frontend** (Vite + TypeScript): a chat UI with a "Connect Spotify"
@@ -189,6 +196,15 @@ files.
 - **`AUX_TIMEZONE`** (`timezone`, default empty = server local) — an IANA name
   such as `Europe/Berlin` for the clock the AI is given each turn. Can also be
   set from the settings UI.
+- **`AUX_LOCATION`** (`location`, default empty) — a `lat,lon` pair (e.g.
+  `52.52,13.40`) or a place name (e.g. `Berlin`) used to tag your listening
+  profile with the current weather (via Open-Meteo, no API key). Empty disables
+  the weather dimension. Also settable in the admin UI.
+- **`AUX_LISTENING_ENABLED`** (`listening.enabled`, default `true`) — the
+  background poller that records recent plays into your listening profile. It
+  no-ops until Spotify is connected.
+- **`AUX_LISTENING_POLL_INTERVAL`** (`listening.poll_interval`, default `20m`) —
+  how often recent plays are collected (a Go duration like `20m` or `1h`).
 
 ## Admin login & runtime settings
 
@@ -219,7 +235,9 @@ change at runtime:
 - the **max output tokens** cap — lower it (or choose a cheaper model like
   Haiku) to save cost;
 - the **timezone** — pick your IANA zone (e.g. `Europe/Berlin`) so the clock
-  the AI reads matches your local time.
+  the AI reads matches your local time;
+- the **location** — a `lat,lon` pair or a place name that tags your listening
+  profile with the current weather.
 
 Values saved there are persisted to `settings_file` (0600), override the
 environment, and hot-swap the Spotify/AI clients without a restart — so a

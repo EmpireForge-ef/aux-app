@@ -67,33 +67,15 @@ creates a playlist.
 - **Multi-modal** — let the model *see* cover art it uploads (vision), for
   feedback loops on generated covers.
 
-## 6. Weather-aware recommendations
+## 6. Weather-aware recommendations — SHIPPED
 
-**Why:** the AI already gets the current time (and timezone) each turn, so
-"something for a Monday morning" works. The current weather is the natural next
-context signal — rainy vs. sunny, hot vs. freezing meaningfully changes what
-fits ("rainy-day lo-fi", "sunny drive playlist"), and users shouldn't have to
-spell it out.
+Delivered as part of the **passive listening profile** (`internal/listening`,
+`internal/weather`): a background poller records each play tagged with
+time-of-day, weekday/weekend, and — with `AUX_LOCATION` set — the current
+weather (Open-Meteo, no key), and the AI reads it via `get_listening_profile`.
+So weather now feeds recommendations through *observed* rainy-day habits rather
+than a one-off "it's raining" line.
 
-**Idea:** wire a weather API (e.g. Open-Meteo — free, no API key, or
-OpenWeatherMap with a key) and fold the current conditions into the per-turn
-context block alongside the time, so the model can factor it in without a tool
-call.
-
-- **Location:** the API needs coordinates. Options, cheapest first: a
-  configurable `AUX_LOCATION` / settings field (lat,lon, or a city name
-  geocoded once); or, later, an optional browser-geolocation prompt passed with
-  the chat request. Keep it opt-in — no location, no weather, no behavior
-  change.
-- **Fetch + cache:** call the weather API server-side and cache the result for
-  ~15–30 min (weather barely moves and it keeps the turn cheap); reuse the
-  persisted-store pattern if it should survive restarts. Degrade silently on
-  API failure — just omit the weather line, never block the turn.
-- **Inject:** add one short line to `turnContext` ("Current weather in Berlin:
-  12°C, light rain") next to the time, gated on the feature being configured —
-  mirrors how the timezone-aware clock is already injected.
-- **Config:** `AUX_WEATHER_ENABLED` + provider/location settings, surfaced in
-  the admin settings UI like the timezone picker.
-- **Prompt:** a guideline nudging the AI to *lightly* weight weather into vibe
-  selections and mention it when relevant ("some rainy-evening jazz"), without
-  overfitting every request to the forecast.
+Possible follow-ups: forecast-aware ("cooling down later") rather than just
+current conditions; correlating with real activity signals (see §5); and a
+lightweight per-turn "profile at a glance" line in addition to the tool.

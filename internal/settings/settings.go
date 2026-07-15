@@ -28,6 +28,9 @@ type Values struct {
 	// Timezone is an IANA name (e.g. "Europe/Berlin"); empty leaves the
 	// configured/server zone in place.
 	Timezone string `json:"timezone,omitempty"`
+	// Location is a "lat,lon" pair or a place name for weather tagging; empty
+	// leaves the configured value in place.
+	Location string `json:"location,omitempty"`
 }
 
 // record is the single-row GORM model holding the settings blob.
@@ -90,6 +93,9 @@ func (s *Store) Update(v Values) (Values, error) {
 	}
 	if v.Timezone != "" {
 		s.values.Timezone = strings.TrimSpace(v.Timezone)
+	}
+	if v.Location != "" {
+		s.values.Location = strings.TrimSpace(v.Location)
 	}
 	if err := s.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},

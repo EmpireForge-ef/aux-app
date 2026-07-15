@@ -5,6 +5,8 @@ package db
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -20,7 +22,12 @@ func Open(dsn string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("no database URL configured — set AUX_DATABASE_URL to a PostgreSQL connection string")
 	}
 	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger:                                   logger.Default.LogMode(logger.Warn),
+		// Warn on real problems, but "record not found" is normal control flow
+		// here (cache misses, first-run cursor lookups), so don't log it.
+		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+		}),
 		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 	if err != nil {

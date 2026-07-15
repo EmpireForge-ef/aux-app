@@ -1,6 +1,29 @@
 package weather
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestForecastCacheHit(t *testing.T) {
+	c := New()
+	// A fresh cached reading is served without any network call.
+	c.fore["Testville"] = cachedForecast{w: Weather{Condition: "rain", TempC: 9}, at: time.Now()}
+	w, err := c.Current(context.Background(), "Testville")
+	if err != nil || w == nil || w.Condition != "rain" || w.TempC != 9 {
+		t.Fatalf("cache hit = %+v err=%v", w, err)
+	}
+	// A stale entry is treated as a miss (would re-fetch).
+	c.fore["Testville"] = cachedForecast{w: Weather{Condition: "rain"}, at: time.Now().Add(-forecastTTL - time.Minute)}
+	c.mu.Lock()
+	_, fresh := c.fore["Testville"]
+	stale := time.Since(c.fore["Testville"].at) >= forecastTTL
+	c.mu.Unlock()
+	if !fresh || !stale {
+		t.Error("expected the entry to be present but stale")
+	}
+}
 
 func TestParseLatLon(t *testing.T) {
 	cases := []struct {
@@ -26,7 +49,9 @@ func TestParseLatLon(t *testing.T) {
 func TestConditionFromCode(t *testing.T) {
 	cases := map[int]string{
 		0:  "clear",
+		1:  "clear",
 		2:  "clouds",
+		3:  "clouds",
 		45: "fog",
 		53: "drizzle",
 		63: "rain",

@@ -34,8 +34,10 @@ artists, and control playback.
   even if you switch apps or your browser is backgrounded: reopen the tab and
   the answer is there (or still streaming). A **Stop** button cancels a turn
   whenever you want.
-- **Configurable timezone** — pick your timezone in the settings so the clock
-  the AI reads ("something for a Friday night") matches your local time.
+- **Time- and weather-aware** — the AI is given the current local time and, when
+  a location is set, the current weather each turn, so "something for a Friday
+  night" or "music for this rain" just works. (Set your timezone and location in
+  the settings.)
 - **Learns your listening habits** — a background poller passively records what
   you play and when, tagging each play with time-of-day, weekday/weekend, and
   (with a location set) the weather. The AI reads this profile via a
@@ -206,9 +208,11 @@ files.
   such as `Europe/Berlin` for the clock the AI is given each turn. Can also be
   set from the settings UI.
 - **`AUX_LOCATION`** (`location`, default empty) — a `lat,lon` pair (e.g.
-  `52.52,13.40`) or a place name (e.g. `Berlin`) used to tag your listening
-  profile with the current weather (via Open-Meteo, no API key). Empty disables
-  the weather dimension. Also settable in the admin UI.
+  `52.52,13.40`) or a place name (e.g. `Berlin`). Used both to give the AI the
+  current weather each turn (so it can pick "music for this weather") and to tag
+  your listening profile with the conditions each play happened in (via
+  Open-Meteo, no API key; readings cached ~20 min). Empty disables the weather
+  dimension. Also settable in the admin UI.
 - **`AUX_LISTENING_ENABLED`** (`listening.enabled`, default `true`) — the
   background poller that records recent plays into your listening profile. It
   no-ops until Spotify is connected.

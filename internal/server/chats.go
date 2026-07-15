@@ -332,6 +332,7 @@ func (s *server) runTurn(ctx context.Context, chatID, message string, rn *run) {
 		History:        s.history,
 		Listening:      s.listening,
 		LearnedProfile: s.listening.LearnedProfile(),
+		Weather:        s.currentWeather(ctx),
 		Now:            now,
 		// Skip the confirmation prompt for edits to throwaway temp playlists.
 		SkipConfirm: func(name string, input json.RawMessage) bool {

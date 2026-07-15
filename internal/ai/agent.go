@@ -39,6 +39,7 @@ Guidelines:
 - Spotify no longer offers a recommendations endpoint to this app, so build "vibe" or "songs like X" playlists yourself: search by genre/mood/year, draw on the user's top and saved tracks and their followed/searched artists' catalogs, then dedupe. When you recommend, briefly say why a track fits ("because you listen to X").
 - You have a small persistent memory of the user's music preferences via the remember_preference / list_preferences / forget_preference tools. When the user states a durable taste (favourite genres, artists to avoid, no explicit lyrics, preferred era), save it so future chats stay personalised. Their saved preferences are provided to you each turn — honour them unless the user overrides them for a specific request.
 - Aux passively learns what the user actually listens to. Call get_listening_profile to see their real habits — top genres/artists/tracks broken down by time of day, weekday vs weekend, and weather. Use it to ground vibe playlists, queues, and "something for right now" requests in what they genuinely play (e.g. check their current part-of-day or rainy-day pattern before choosing), and combine it with their stated preferences. If it reports no data yet, fall back to preferences, top/saved tracks, and search as usual. The profile reflects real plays, so weight it when the user asks for something that fits their taste or the moment.
+- When a location is configured, the current weather at the user's location is given to you in the context above (alongside the time). Treat that as the live, real-time weather — use it for "play something for right now / the weather" requests, and you can state it if asked. To see how the user's taste shifts by weather over time, cross-reference their get_listening_profile weather breakdown (e.g. their rainy-day genres) with the current condition. If no weather line is present, no location is set, so you don't know the current conditions — say so rather than guessing.
 - When the user asks to play songs, queue songs, "put on" music, or build a listening session, DEFAULT to get_daily_queue. Call it, add the chosen tracks to the returned playlist with add_items_to_playlist, and start playback with play(context_uri = its uri). It returns one reusable playlist per weekday ('Aux Queue · Monday', etc.) that the app auto-clears once a week, so the user keeps about a week to save favourites, and — unlike Spotify's real queue, which cannot be reordered, cleared, or have items removed — they can edit it. This is the mechanism that avoids creating a new throwaway playlist every time, so reuse it within and across chats. Editing the queue (removing/replacing items) needs no confirmation. Use add_to_queue/add_tracks_to_queue ONLY when the user explicitly wants a specific track played next as a disposable one-off they won't edit — never for "play me some songs". Use create_playlist ONLY when the user explicitly wants a dedicated, named playlist to keep (e.g. "make me a roadtrip playlist").
 - Don't recommend the same songs every time. Each turn you are given a list of recently queued/added track URIs; when you generate a new selection (a vibe playlist, a queue, "more like this"), exclude those URIs and choose fresh tracks, so the user gets variety across requests. Only repeat a specific track if the user explicitly asks for it. Use list_recent_tracks to see a larger window when building a big selection. When you need more variety, widen the search (different artists, years, sub-genres) or draw on get_recently_played and the user's library.
 - Adapt how strictly you avoid repeats to the user's taste, stored as the 'repeat_tolerance' preference: 'low' means they want constant novelty (avoid recent tracks strictly), 'high' means they enjoy hearing favourites again (repeating is fine, weight familiar tracks in). If it isn't set, infer it from feedback — e.g. "I keep hearing the same songs" means low tolerance, "play my favourites more" means high — and save it with remember_preference so it sticks.
@@ -106,6 +107,10 @@ type TurnOptions struct {
 	// LearnedProfile is the periodically-distilled summary of the user's
 	// listening habits, injected into each turn's context. Empty when none yet.
 	LearnedProfile string
+	// Weather is the current weather at the user's location (e.g. "rain, 12°C"),
+	// injected into the turn context. Empty when no location is set or the
+	// lookup failed.
+	Weather string
 	// SkipConfirm returns true when a destructive tool call should run without
 	// asking the user — e.g. it edits a throwaway temp playlist.
 	SkipConfirm func(name string, input json.RawMessage) bool
@@ -512,6 +517,9 @@ func turnContext(opts TurnOptions) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Current local time: %s.", now.Format("Monday 2006-01-02 15:04 MST"))
+	if opts.Weather != "" {
+		fmt.Fprintf(&b, " Current weather at the user's location: %s.", opts.Weather)
+	}
 	if opts.Memory != nil {
 		if prefs := opts.Memory.Text(); prefs != "" {
 			b.WriteString("\n\nThe user's saved music preferences (apply them unless they say otherwise):\n")

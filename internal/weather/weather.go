@@ -21,12 +21,23 @@ type Weather struct {
 	TempC     float64 `json:"temp_c"`
 }
 
-// Client fetches current weather and caches geocoding lookups.
+// forecastTTL is how long a current-weather reading is reused before re-fetching.
+// Weather barely moves, so this keeps per-turn injection close to free.
+const forecastTTL = 20 * time.Minute
+
+type cachedForecast struct {
+	w  Weather
+	at time.Time
+}
+
+// Client fetches current weather and caches geocoding lookups and recent
+// forecasts. It is safe for concurrent use.
 type Client struct {
 	http *http.Client
 
-	mu  sync.Mutex
-	geo map[string][2]float64 // location string -> {lat, lon}
+	mu   sync.Mutex
+	geo  map[string][2]float64     // location string -> {lat, lon}
+	fore map[string]cachedForecast // location string -> recent reading
 }
 
 // New returns a weather client.
@@ -34,17 +45,27 @@ func New() *Client {
 	return &Client{
 		http: &http.Client{Timeout: 8 * time.Second},
 		geo:  map[string][2]float64{},
+		fore: map[string]cachedForecast{},
 	}
 }
 
 // Current returns the current weather at location, which may be "lat,lon" (e.g.
 // "52.52,13.40") or a place name (e.g. "Berlin") that is geocoded once and
-// cached. An empty location yields (nil, nil): weather is simply unavailable.
+// cached. Readings are cached for forecastTTL. An empty location yields
+// (nil, nil): weather is simply unavailable.
 func (c *Client) Current(ctx context.Context, location string) (*Weather, error) {
 	location = strings.TrimSpace(location)
 	if location == "" {
 		return nil, nil
 	}
+	c.mu.Lock()
+	if f, ok := c.fore[location]; ok && time.Since(f.at) < forecastTTL {
+		w := f.w
+		c.mu.Unlock()
+		return &w, nil
+	}
+	c.mu.Unlock()
+
 	lat, lon, err := c.resolve(ctx, location)
 	if err != nil {
 		return nil, err
@@ -63,7 +84,11 @@ func (c *Client) Current(ctx context.Context, location string) (*Weather, error)
 	if err := c.getJSON(ctx, "https://api.open-meteo.com/v1/forecast?"+q.Encode(), &out); err != nil {
 		return nil, err
 	}
-	return &Weather{Condition: conditionFromCode(out.Current.Code), TempC: out.Current.Temp}, nil
+	w := Weather{Condition: conditionFromCode(out.Current.Code), TempC: out.Current.Temp}
+	c.mu.Lock()
+	c.fore[location] = cachedForecast{w: w, at: time.Now()}
+	c.mu.Unlock()
+	return &w, nil
 }
 
 // resolve turns a location string into coordinates: a "lat,lon" pair is parsed
@@ -138,9 +163,9 @@ func parseLatLon(s string) (lat, lon float64, ok bool) {
 // conditionFromCode maps a WMO weather code to a short condition word.
 func conditionFromCode(code int) string {
 	switch {
-	case code == 0:
+	case code <= 1: // 0 clear sky, 1 mainly clear
 		return "clear"
-	case code <= 3:
+	case code <= 3: // 2 partly cloudy, 3 overcast
 		return "clouds"
 	case code == 45 || code == 48:
 		return "fog"

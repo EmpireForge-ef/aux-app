@@ -83,6 +83,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		history:       hist,
 		plcache:       plcache,
 		listening:     lstore,
+		weather:       weather.New(),
 		adminSessions: newSessionStore(),
 		confirms:      make(map[string]chan bool),
 		runs:          make(map[string]*run),
@@ -110,7 +111,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	// user's music profile. It no-ops until Spotify is connected.
 	if cfg.Listening.Enabled {
 		poller := listening.NewPoller(
-			lstore, weather.New(), cfg.Listening.PollInterval,
+			lstore, s.weather, cfg.Listening.PollInterval,
 			func() (*spotifyapi.Client, bool) { mgr, _ := s.clients(); return mgr.Client() },
 			s.effectiveLocation, s.turnLocation,
 		)
@@ -212,6 +213,7 @@ type server struct {
 	history       *history.Store
 	plcache       *playlistcache.Store
 	listening     *listening.Store
+	weather       *weather.Client
 	analyzer      *listening.Analyzer // nil when profile analysis is disabled
 	adminSessions *sessionStore
 	oidc          *oidcauth.Authenticator // nil when OIDC is not configured
@@ -294,6 +296,26 @@ func (s *server) effectiveLocation() string {
 		return l
 	}
 	return s.cfg.Location
+}
+
+// currentWeather returns a short description of the current weather at the
+// configured location (e.g. "rain, 12°C"), or "" when no location is set or the
+// lookup fails. Readings are cached in the weather client, so it's cheap to
+// call every turn.
+func (s *server) currentWeather(ctx context.Context) string {
+	loc := s.effectiveLocation()
+	if loc == "" {
+		return ""
+	}
+	w, err := s.weather.Current(ctx, loc)
+	if err != nil {
+		slog.Warn("current weather lookup failed", "err", err)
+		return ""
+	}
+	if w == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s, %.0f°C", w.Condition, w.TempC)
 }
 
 // turnLocation resolves the effective timezone to a *time.Location, or nil

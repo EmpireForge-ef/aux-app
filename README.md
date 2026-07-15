@@ -30,6 +30,11 @@ artists, and control playback.
   whenever you want.
 - **Configurable timezone** — pick your timezone in the settings so the clock
   the AI reads ("something for a Friday night") matches your local time.
+- **Efficient & long-lived chats** — Anthropic prompt caching is used for the
+  tool definitions, system prompt, and running conversation, so repeated
+  requests are much cheaper and faster. When a chat grows near the model's
+  context limit, older turns are automatically summarised (keeping playlists,
+  IDs, and preferences) so conversations never hit the token ceiling.
 - **Admin login** — protect the whole app with a password and/or OpenID
   Connect single sign-on (Keycloak-compatible).
 - **Runtime settings UI** — set the Spotify credentials, Anthropic API key,
@@ -120,6 +125,11 @@ of precedence. Each setting lists its environment variable, the equivalent
   model used for the agent. Also settable in the admin UI.
 - **`AUX_ANTHROPIC_MAX_TOKENS`** (`anthropic.max_tokens`, default `8192`) —
   max output tokens per model turn. Also settable in the admin UI.
+- **`AUX_ANTHROPIC_CONTEXT_LIMIT`** (`anthropic.context_limit`, default
+  `200000`) — the model's usable input-context size in tokens. As a chat's
+  history approaches it, Aux summarises the older turns so requests keep fitting
+  (see "Long conversations" below). Raise it if your model/tier allows a larger
+  window.
 
 **Admin login**
 

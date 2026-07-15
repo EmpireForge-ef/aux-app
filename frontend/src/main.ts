@@ -1,7 +1,7 @@
 import "./style.css";
 
 type AgentEvent = {
-  type: "user" | "text" | "tool_use" | "tool_result" | "confirm" | "done" | "error";
+  type: "user" | "text" | "tool_use" | "tool_result" | "confirm" | "notice" | "done" | "error";
   text?: string;
   name?: string;
   input?: unknown;
@@ -789,6 +789,10 @@ async function renderEvent(run: ChatRun, ev: AgentEvent): Promise<void> {
       }
       break;
     }
+    case "notice":
+      run.assistantEl = null;
+      addNote(ev.message ?? "");
+      break;
     case "error":
       run.assistantEl = null;
       run.currentTool = null;

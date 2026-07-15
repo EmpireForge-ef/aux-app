@@ -285,7 +285,7 @@ func (s *server) rebuildClients() {
 	if err := mgr.LoadPersisted(); err != nil {
 		log.Printf("warning: could not restore spotify token: %v", err)
 	}
-	agent := ai.New(key, model, maxTokens)
+	agent := ai.New(key, model, maxTokens, s.cfg.Anthropic.ContextLimit)
 
 	s.mu.Lock()
 	s.spotify = mgr

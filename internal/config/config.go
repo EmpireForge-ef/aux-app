@@ -21,6 +21,10 @@ type Anthropic struct {
 	APIKey    string `mapstructure:"api_key"`
 	Model     string `mapstructure:"model"`
 	MaxTokens int64  `mapstructure:"max_tokens"`
+	// ContextLimit is the model's usable input-context size in tokens. When a
+	// chat's estimated history approaches it, older turns are summarised so the
+	// request stays under the limit. Default 200000.
+	ContextLimit int64 `mapstructure:"context_limit"`
 }
 
 type Admin struct {
@@ -99,6 +103,7 @@ func New(cfgFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("admin.password", "")
 	v.SetDefault("anthropic.model", "claude-opus-4-8")
 	v.SetDefault("anthropic.max_tokens", 8192)
+	v.SetDefault("anthropic.context_limit", 200000)
 	v.SetDefault("oidc.scopes", "openid profile email")
 	// Keys without a meaningful default still need to be registered, or
 	// viper's Unmarshal won't see values that come only from the environment.

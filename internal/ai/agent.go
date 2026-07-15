@@ -108,14 +108,16 @@ const recentInjectN = 60
 // stateless: conversation history is passed in and returned by Chat, so the
 // caller owns persistence.
 type Agent struct {
-	client     anthropic.Client
-	model      anthropic.Model
-	maxTokens  int64
-	tools      map[string]aitools.Tool
-	toolParams []anthropic.ToolUnionParam
+	client       anthropic.Client
+	model        anthropic.Model
+	maxTokens    int64
+	contextLimit int64
+	baseTokens   int // rough token cost of the static system prompt + tools
+	tools        map[string]aitools.Tool
+	toolParams   []anthropic.ToolUnionParam
 }
 
-func New(apiKey, model string, maxTokens int64) *Agent {
+func New(apiKey, model string, maxTokens, contextLimit int64) *Agent {
 	var opts []option.RequestOption
 	if apiKey != "" {
 		opts = append(opts, option.WithAPIKey(apiKey))
@@ -125,12 +127,21 @@ func New(apiKey, model string, maxTokens int64) *Agent {
 	for _, t := range registry {
 		byName[t.Name] = t
 	}
+	toolParams := append(append(aitools.Params(registry), memoryToolParams...), historyToolParams...)
+	// Cache the (static, large) tool definitions: one breakpoint on the last
+	// tool caches the whole block so it isn't re-billed on every request.
+	if n := len(toolParams); n > 0 && toolParams[n-1].OfTool != nil {
+		toolParams[n-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
+
 	return &Agent{
-		client:     anthropic.NewClient(opts...),
-		model:      anthropic.Model(model),
-		maxTokens:  maxTokens,
-		tools:      byName,
-		toolParams: append(append(aitools.Params(registry), memoryToolParams...), historyToolParams...),
+		client:       anthropic.NewClient(opts...),
+		model:        anthropic.Model(model),
+		maxTokens:    maxTokens,
+		contextLimit: contextLimit,
+		baseTokens:   estimateJSONTokens(toolParams) + estimateTextTokens(systemPrompt),
+		tools:        byName,
+		toolParams:   toolParams,
 	}
 }
 
@@ -268,6 +279,10 @@ func (a *Agent) ListModels(ctx context.Context) ([]ModelInfo, error) {
 // user has not connected Spotify yet; tools then return an instructive error
 // to the model. Destructive tools are gated through confirm before they run.
 func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text string, sp *spotify.Client, emit func(Event), opts TurnOptions) ([]anthropic.MessageParam, error) {
+	// Summarise older turns up front if the stored history is already near the
+	// context limit, so the very first request of this turn fits.
+	history = a.compactIfNeeded(ctx, history, emit)
+
 	messages := append(history, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
 
 	// The stable system prompt stays first (cached); volatile per-turn context
@@ -281,7 +296,12 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 		system = append(system, anthropic.TextBlockParam{Text: ctxText})
 	}
 
+	reactiveCompactions := 0
 	for turn := 0; turn < maxTurns; turn++ {
+		// Cache the conversation so far so a multi-tool turn doesn't re-bill the
+		// growing pile of tool results on every step within the turn.
+		markConversationCache(messages)
+
 		params := anthropic.MessageNewParams{
 			Model:     a.model,
 			MaxTokens: a.maxTokens,
@@ -295,7 +315,7 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 		for stream.Next() {
 			event := stream.Current()
 			if err := msg.Accumulate(event); err != nil {
-				return messages, fmt.Errorf("accumulate stream: %w", err)
+				return a.stripCache(messages), fmt.Errorf("accumulate stream: %w", err)
 			}
 			if delta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
 				if td, ok := delta.Delta.AsAny().(anthropic.TextDelta); ok && td.Text != "" {
@@ -304,14 +324,26 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 			}
 		}
 		if err := stream.Err(); err != nil {
-			return messages, err
+			// If the request still overflowed the context window, summarise and
+			// retry this turn a couple of times before giving up.
+			if isContextLengthError(err) && reactiveCompactions < 2 {
+				reactiveCompactions++
+				messages = a.compact(ctx, messages, a.keepBudget()/2, emit)
+				turn--
+				continue
+			}
+			return a.stripCache(messages), err
 		}
+
+		u := msg.Usage
+		log.Printf("anthropic usage: input=%d cache_write=%d cache_read=%d output=%d",
+			u.InputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens, u.OutputTokens)
 
 		messages = append(messages, msg.ToParam())
 
 		if msg.StopReason != anthropic.StopReasonToolUse {
 			emit(Event{Type: "done", StopReason: string(msg.StopReason)})
-			return messages, nil
+			return a.stripCache(messages), nil
 		}
 
 		var results []anthropic.ContentBlockParamUnion
@@ -379,11 +411,11 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 			}
 		}
 		if len(results) == 0 {
-			return messages, errors.New("model stopped for tool use but produced no tool calls")
+			return a.stripCache(messages), errors.New("model stopped for tool use but produced no tool calls")
 		}
 		messages = append(messages, anthropic.NewUserMessage(results...))
 	}
-	return messages, fmt.Errorf("agent did not finish within %d turns", maxTurns)
+	return a.stripCache(messages), fmt.Errorf("agent did not finish within %d turns", maxTurns)
 }
 
 func (a *Agent) runTool(ctx context.Context, name string, input json.RawMessage, sp *spotify.Client) (string, error) {
@@ -441,4 +473,208 @@ func summarize(s string) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// --- prompt caching ---------------------------------------------------------
+
+// setBlockCacheControl sets (or clears, with a zero value) the cache_control on
+// a content block, for the block kinds this agent actually produces.
+func setBlockCacheControl(b *anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {
+	switch {
+	case b.OfText != nil:
+		b.OfText.CacheControl = cc
+	case b.OfToolResult != nil:
+		b.OfToolResult.CacheControl = cc
+	case b.OfToolUse != nil:
+		b.OfToolUse.CacheControl = cc
+	case b.OfImage != nil:
+		b.OfImage.CacheControl = cc
+	case b.OfDocument != nil:
+		b.OfDocument.CacheControl = cc
+	}
+}
+
+// markConversationCache puts a single cache breakpoint on the last content
+// block of the conversation, clearing any earlier one first so at most one
+// message-level breakpoint exists (Anthropic caps total breakpoints at 4:
+// tools + system + this).
+func markConversationCache(messages []anthropic.MessageParam) {
+	var zero anthropic.CacheControlEphemeralParam
+	for _, m := range messages {
+		for i := range m.Content {
+			setBlockCacheControl(&m.Content[i], zero)
+		}
+	}
+	if len(messages) == 0 {
+		return
+	}
+	last := messages[len(messages)-1]
+	if len(last.Content) == 0 {
+		return
+	}
+	setBlockCacheControl(&last.Content[len(last.Content)-1], anthropic.NewCacheControlEphemeralParam())
+}
+
+// stripCache clears all cache_control markers before the messages are returned
+// for persistence, so the stored history stays clean.
+func (a *Agent) stripCache(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	var zero anthropic.CacheControlEphemeralParam
+	for _, m := range messages {
+		for i := range m.Content {
+			setBlockCacheControl(&m.Content[i], zero)
+		}
+	}
+	return messages
+}
+
+// --- context compaction -----------------------------------------------------
+
+const summarizeSystemPrompt = `You compress a conversation between a user and Aux, an AI that controls the user's Spotify. Produce a dense summary that preserves everything needed to continue seamlessly: the user's requests and intent, durable preferences they stated, and concrete results — playlist names and IDs/URIs created or edited, tracks added, and any pending or half-finished task. Omit small talk. Write it as notes, not prose; no preamble.`
+
+// estimateTextTokens is a cheap, dependency-free token estimate (~4 chars/token)
+// used to decide when to compact — deliberately conservative, not exact.
+func estimateTextTokens(s string) int { return len(s)/4 + 1 }
+
+// estimateJSONTokens estimates the token cost of any value by its JSON size.
+func estimateJSONTokens(v any) int {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return len(data) / 4
+}
+
+func estimateMessagesTokens(messages []anthropic.MessageParam) int {
+	total := 0
+	for _, m := range messages {
+		total += estimateJSONTokens(m)
+	}
+	return total
+}
+
+func (a *Agent) compactAt() int  { return int(a.contextLimit) * 3 / 4 }
+func (a *Agent) keepBudget() int { return int(a.contextLimit) * 2 / 5 }
+
+// compactIfNeeded summarises older turns when the estimated request size
+// approaches the context limit; otherwise it returns messages unchanged.
+func (a *Agent) compactIfNeeded(ctx context.Context, messages []anthropic.MessageParam, emit func(Event)) []anthropic.MessageParam {
+	if a.contextLimit <= 0 {
+		return messages
+	}
+	if a.baseTokens+estimateMessagesTokens(messages) < a.compactAt() {
+		return messages
+	}
+	return a.compact(ctx, messages, a.keepBudget(), emit)
+}
+
+// compact keeps the most recent messages that fit in keepBudget (estimated
+// tokens) verbatim and replaces the older prefix with a one-message summary,
+// preserving valid user/assistant alternation. On any failure it returns the
+// input unchanged so the turn can still proceed (the reactive retry is the
+// backstop).
+func (a *Agent) compact(ctx context.Context, messages []anthropic.MessageParam, keepBudget int, emit func(Event)) []anthropic.MessageParam {
+	if len(messages) < 4 {
+		return messages // nothing meaningful to summarise
+	}
+	// Walk back from the end, keeping messages until we exceed keepBudget.
+	kept, cut := 0, len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		t := estimateJSONTokens(messages[i])
+		if cut < len(messages) && kept+t > keepBudget {
+			break
+		}
+		kept += t
+		cut = i
+	}
+	// The summary is a user message, so the kept suffix must start with an
+	// assistant message to preserve alternation. History alternates
+	// user/assistant from index 0, so an even cut index is a user message —
+	// push it into the summarised prefix.
+	if cut%2 == 0 {
+		cut++
+	}
+	if cut <= 0 || cut >= len(messages) {
+		return messages
+	}
+
+	summary, err := a.summarizeMessages(ctx, messages[:cut])
+	if err != nil || summary == "" {
+		log.Printf("compaction summary failed: %v", err)
+		return messages
+	}
+
+	compacted := make([]anthropic.MessageParam, 0, len(messages)-cut+1)
+	compacted = append(compacted, anthropic.NewUserMessage(anthropic.NewTextBlock(
+		"[Summary of the earlier part of this conversation]\n"+summary)))
+	compacted = append(compacted, messages[cut:]...)
+
+	if emit != nil {
+		emit(Event{Type: "notice", Message: "Summarised earlier messages to stay within the context limit."})
+	}
+	return compacted
+}
+
+// summarizeMessages asks the model for a compact summary of a slice of history,
+// rendered as plain text so tool_use/tool_result pairing doesn't matter here.
+func (a *Agent) summarizeMessages(ctx context.Context, messages []anthropic.MessageParam) (string, error) {
+	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     a.model,
+		MaxTokens: 1024,
+		System:    []anthropic.TextBlockParam{{Text: summarizeSystemPrompt}},
+		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(
+			"Conversation to summarise:\n\n" + renderForSummary(messages)))},
+	})
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, block := range resp.Content {
+		if t, ok := block.AsAny().(anthropic.TextBlock); ok {
+			b.WriteString(t.Text)
+		}
+	}
+	return strings.TrimSpace(b.String()), nil
+}
+
+// renderForSummary flattens messages to a compact text transcript. Tool calls
+// keep their name and (truncated) input — where the playlist IDs and track
+// URIs worth preserving live — while bulky tool results are elided.
+func renderForSummary(messages []anthropic.MessageParam) string {
+	var b strings.Builder
+	for _, m := range messages {
+		role := string(m.Role)
+		for _, block := range m.Content {
+			switch {
+			case block.OfText != nil:
+				fmt.Fprintf(&b, "%s: %s\n", role, block.OfText.Text)
+			case block.OfToolUse != nil:
+				input, _ := json.Marshal(block.OfToolUse.Input)
+				in := string(input)
+				if len(in) > 300 {
+					in = in[:300] + "…"
+				}
+				fmt.Fprintf(&b, "%s: [tool %s %s]\n", role, block.OfToolUse.Name, in)
+			case block.OfToolResult != nil:
+				fmt.Fprintf(&b, "%s: [tool result]\n", role)
+			}
+		}
+	}
+	return b.String()
+}
+
+// isContextLengthError reports whether err is the API's "prompt is too long"
+// rejection, so we can summarise and retry rather than failing the turn.
+func isContextLengthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "prompt is too long") || strings.Contains(msg, "too many total text bytes") {
+		return true
+	}
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == 400 && strings.Contains(strings.ToLower(apiErr.Error()), "too long")
+	}
+	return false
 }

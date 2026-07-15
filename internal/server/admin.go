@@ -194,6 +194,22 @@ func (s *server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
+// handleAnalyzeProfile triggers an immediate distillation of the listening
+// data into the learned profile (the "Analyze now" button).
+func (s *server) handleAnalyzeProfile(w http.ResponseWriter, r *http.Request) {
+	if s.analyzer == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "profile analysis is disabled"})
+		return
+	}
+	summary, err := s.analyzer.AnalyzeOnce(r.Context())
+	if err != nil {
+		// Not enough data / model error is a soft outcome, not a 500.
+		writeJSON(w, http.StatusOK, map[string]string{"status": "skipped", "message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "summary": summary})
+}
+
 // handleUpdateSettings applies changed credentials, persists them, and
 // hot-swaps the Spotify and AI clients. Empty fields are left unchanged.
 func (s *server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {

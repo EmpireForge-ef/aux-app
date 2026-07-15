@@ -1,6 +1,7 @@
 package listening
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -94,6 +95,63 @@ func TestGenreCacheAndCursor(t *testing.T) {
 	s.SetLastPlayedAt(when)
 	if !s.LastPlayedAt().Equal(when) {
 		t.Errorf("cursor = %v, want %v", s.LastPlayedAt(), when)
+	}
+}
+
+func TestLearnedProfileRoundTrip(t *testing.T) {
+	s := newStore(t)
+	if s.LearnedProfile() != "" || !s.ProfileGeneratedAt().IsZero() {
+		t.Fatal("expected empty profile initially")
+	}
+	s.SetLearnedProfile("- mornings: lo-fi\n- weekends: house")
+	if s.LearnedProfile() == "" {
+		t.Error("profile should be set")
+	}
+	if s.ProfileGeneratedAt().IsZero() {
+		t.Error("generated-at should be stamped")
+	}
+	s.SetLearnedProfile("- updated")
+	if s.LearnedProfile() != "- updated" {
+		t.Errorf("profile = %q, want updated", s.LearnedProfile())
+	}
+}
+
+func TestAnalyzerGatesAndStores(t *testing.T) {
+	s := newStore(t)
+	calls := 0
+	stub := func(ctx context.Context, data string) (string, error) {
+		calls++
+		if data == "" {
+			t.Error("analysis input should not be empty")
+		}
+		return "- distilled profile", nil
+	}
+	a := NewAnalyzer(s, stub, time.Hour)
+
+	// Too little data: gated, analyzer not called.
+	if _, err := a.AnalyzeOnce(context.Background()); err == nil {
+		t.Error("expected a not-enough-data error")
+	}
+	if calls != 0 {
+		t.Error("analyze should not run below the play threshold")
+	}
+
+	// Seed enough plays, then it runs and stores.
+	batch := make([]PlayEvent, a.minPlays)
+	for i := range batch {
+		batch[i] = ev(time.Now().Add(time.Duration(i)*time.Minute), "spotify:track:x"+string(rune('a'+i)),
+			"T", "A", []string{"jazz"}, "morning", false, "")
+	}
+	s.Insert(batch)
+	summary, err := a.AnalyzeOnce(context.Background())
+	if err != nil {
+		t.Fatalf("AnalyzeOnce: %v", err)
+	}
+	if summary != "- distilled profile" || calls != 1 {
+		t.Errorf("summary=%q calls=%d", summary, calls)
+	}
+	if s.LearnedProfile() != "- distilled profile" {
+		t.Error("summary should be persisted")
 	}
 }
 

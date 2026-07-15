@@ -35,7 +35,10 @@ artists, and control playback.
   (with a location set) the weather. The AI reads this profile via a
   `get_listening_profile` tool to ground recommendations in what you *actually*
   listen to — your rainy-morning genres, your weekend-night artists — instead
-  of just what you've told it.
+  of just what you've told it. Periodically (weekly by default) the AI also
+  distils the data into a short "learned profile" that's injected into every
+  chat, so it knows your patterns proactively; a "Analyze now" button forces an
+  immediate refresh.
 - **Efficient & long-lived chats** — Anthropic prompt caching is used for the
   tool definitions, system prompt, and running conversation, so repeated
   requests are much cheaper and faster. When a chat grows near the model's
@@ -205,6 +208,18 @@ files.
   no-ops until Spotify is connected.
 - **`AUX_LISTENING_POLL_INTERVAL`** (`listening.poll_interval`, default `20m`) —
   how often recent plays are collected (a Go duration like `20m` or `1h`).
+- **`AUX_PROFILE_ANALYSIS_ENABLED`** (`profile.analysis_enabled`, default
+  `true`) — the periodic AI distillation of your listening data into a "learned
+  profile" injected into every chat. A "Analyze now" button forces it on demand.
+- **`AUX_PROFILE_ANALYSIS_INTERVAL`** (`profile.analysis_interval`, default
+  `168h`) — how often the distillation runs (a Go duration; `168h` = weekly).
+
+**Logging**
+
+- **`AUX_LOG_FORMAT`** (`log.format`, default `text`) — `text` for
+  human-readable logs, `json` for structured logs (log aggregators).
+- **`AUX_LOG_LEVEL`** (`log.level`, default `info`) — `debug`, `info`, `warn`,
+  or `error`. `debug` includes per-request Anthropic token usage.
 
 ## Admin login & runtime settings
 
@@ -237,7 +252,10 @@ change at runtime:
 - the **timezone** — pick your IANA zone (e.g. `Europe/Berlin`) so the clock
   the AI reads matches your local time;
 - the **location** — a `lat,lon` pair or a place name that tags your listening
-  profile with the current weather.
+  profile with the current weather; a **Locate** button fills it from your
+  browser's geolocation (needs an HTTPS connection);
+- **Analyze my listening now** — forces an immediate distillation of your
+  listening data into the learned profile.
 
 Values saved there are persisted to `settings_file` (0600), override the
 environment, and hot-swap the Spotify/AI clients without a restart — so a

@@ -103,6 +103,9 @@ type TurnOptions struct {
 	Now       time.Time   // current time for context; zero means time.Now()
 	History   History     // recently-used tracks, to avoid repetition (nil disables)
 	Listening Listening   // passively-learned listening profile (nil disables the tool)
+	// LearnedProfile is the periodically-distilled summary of the user's
+	// listening habits, injected into each turn's context. Empty when none yet.
+	LearnedProfile string
 	// SkipConfirm returns true when a destructive tool call should run without
 	// asking the user — e.g. it edits a throwaway temp playlist.
 	SkipConfirm func(name string, input json.RawMessage) bool
@@ -515,6 +518,10 @@ func turnContext(opts TurnOptions) string {
 			b.WriteString(prefs)
 		}
 	}
+	if opts.LearnedProfile != "" {
+		b.WriteString("\n\nLearned listening profile (durable patterns observed from what the user actually plays — weight these when recommending):\n")
+		b.WriteString(opts.LearnedProfile)
+	}
 	if opts.History != nil {
 		if recent := opts.History.Recent(recentInjectN); len(recent) > 0 {
 			b.WriteString("\n\nRecently queued/added tracks — do NOT queue or add these again when generating new selections (playlists, queues, \"more like this\") unless the user explicitly asks to repeat a specific one. Pick different tracks:\n")
@@ -670,6 +677,30 @@ func (a *Agent) compact(ctx context.Context, messages []anthropic.MessageParam, 
 		emit(Event{Type: "notice", Message: "Summarised earlier messages to stay within the context limit."})
 	}
 	return compacted
+}
+
+const analyzeSystemPrompt = `You analyse a user's music-listening data and write a concise "learned profile" of durable patterns, for grounding future recommendations. Cover, only where the data supports it: the genres and artists they gravitate to; how taste shifts by time of day (morning/afternoon/evening/night), weekday vs weekend, and weather; and any recent trend or drift. Write 4–8 short, specific bullet lines grounded ONLY in the data provided — no preamble, no caveats, and don't just restate the raw numbers; synthesise them into useful, human patterns.`
+
+// Analyze distils a block of listening data into a short "learned profile" in
+// one non-streaming call. Used by the scheduled profile analyzer.
+func (a *Agent) Analyze(ctx context.Context, data string) (string, error) {
+	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     a.model,
+		MaxTokens: 700,
+		System:    []anthropic.TextBlockParam{{Text: analyzeSystemPrompt}},
+		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(
+			"Listening data (aggregated):\n\n" + data))},
+	})
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, block := range resp.Content {
+		if t, ok := block.AsAny().(anthropic.TextBlock); ok {
+			b.WriteString(t.Text)
+		}
+	}
+	return strings.TrimSpace(b.String()), nil
 }
 
 // summarizeMessages asks the model for a compact summary of a slice of history,

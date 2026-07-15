@@ -228,9 +228,16 @@ function renderApp(session: AdminSession): void {
           <select id="set-timezone"></select>
         </label>
         <label>Location (for weather)
-          <input id="set-location" type="text" autocomplete="off" placeholder="e.g. Berlin or 52.52,13.40" />
+          <div class="model-row">
+            <input id="set-location" type="text" autocomplete="off" placeholder="e.g. Berlin or 52.52,13.40" />
+            <button type="button" id="use-my-location" title="Fill in your device's location">Locate</button>
+          </div>
         </label>
         <p class="hint">Secrets stay blurred: leave a field empty to keep its current value. Pick a cheaper model or lower the token cap to save cost. The timezone sets the clock the AI reads; the location adds weather to your listening profile. Changes apply immediately.</p>
+        <div class="model-row">
+          <button type="button" id="analyze-profile" title="Have the AI distil your listening data into a profile now">Analyze my listening now</button>
+          <span id="analyze-status" class="hint"></span>
+        </div>
         <p class="error-text" id="settings-error"></p>
         <div class="modal-actions">
           <button type="button" id="settings-cancel">Cancel</button>
@@ -503,6 +510,40 @@ function wireSettings(): void {
   const maxTokens = document.querySelector<HTMLInputElement>("#set-max-tokens")!;
   const timezone = document.querySelector<HTMLSelectElement>("#set-timezone")!;
   const location = document.querySelector<HTMLInputElement>("#set-location")!;
+  const useLocation = document.querySelector<HTMLButtonElement>("#use-my-location")!;
+
+  // Fill the location field from the browser's Geolocation API. It only works
+  // in a secure context (HTTPS or localhost); on a plain-HTTP LAN the manual
+  // field stays the fallback.
+  useLocation.addEventListener("click", () => {
+    if (!navigator.geolocation || !window.isSecureContext) {
+      errEl.textContent =
+        "Getting your location needs a secure (HTTPS) connection — type a city or lat,lon instead.";
+      return;
+    }
+    const label = useLocation.textContent;
+    useLocation.disabled = true;
+    useLocation.textContent = "…";
+    const restore = () => {
+      useLocation.disabled = false;
+      useLocation.textContent = label;
+    };
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        location.value = `${pos.coords.latitude.toFixed(4)},${pos.coords.longitude.toFixed(4)}`;
+        errEl.textContent = "";
+        restore();
+      },
+      (err) => {
+        errEl.textContent =
+          err.code === err.PERMISSION_DENIED
+            ? "Location permission denied."
+            : "Could not get your location.";
+        restore();
+      },
+      { timeout: 10000 },
+    );
+  });
 
   // Ensures `tz` is present as an option and selected; adds it (e.g. a
   // configured zone that isn't in the shortlist) if missing.
@@ -573,6 +614,24 @@ function wireSettings(): void {
     } finally {
       fetchModels.disabled = false;
       fetchModels.textContent = "Fetch";
+    }
+  });
+
+  const analyzeBtn = document.querySelector<HTMLButtonElement>("#analyze-profile")!;
+  const analyzeStatus = document.querySelector<HTMLSpanElement>("#analyze-status")!;
+  analyzeBtn.addEventListener("click", async () => {
+    analyzeBtn.disabled = true;
+    analyzeStatus.textContent = "Analyzing…";
+    try {
+      const res = await fetch("/api/admin/analyze-profile", { method: "POST" });
+      if (res.status === 401) return boot();
+      const data = await res.json().catch(() => ({}));
+      analyzeStatus.textContent =
+        data.status === "ok" ? "Profile updated ✓" : (data.message ?? data.error ?? "Nothing to analyze yet.");
+    } catch {
+      analyzeStatus.textContent = "Analysis failed.";
+    } finally {
+      analyzeBtn.disabled = false;
     }
   });
 

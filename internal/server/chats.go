@@ -325,11 +325,12 @@ func (s *server) runTurn(ctx context.Context, chatID, message string, rn *run) {
 	turnCtx := aitools.WithTempPlaylists(ctx, s.temps)
 	turnCtx = aitools.WithPlaylistCache(turnCtx, s.plcache)
 	messages, chatErr := agent.Chat(turnCtx, c.Messages, message, sp, emit, ai.TurnOptions{
-		Confirm:   confirm,
-		Memory:    s.prefs,
-		History:   s.history,
-		Listening: s.listening,
-		Now:       now,
+		Confirm:        confirm,
+		Memory:         s.prefs,
+		History:        s.history,
+		Listening:      s.listening,
+		LearnedProfile: s.listening.LearnedProfile(),
+		Now:            now,
 		// Skip the confirmation prompt for edits to throwaway temp playlists.
 		SkipConfirm: func(name string, input json.RawMessage) bool {
 			return aitools.IsTempPlaylistEdit(s.temps, name, input)

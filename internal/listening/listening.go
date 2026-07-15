@@ -51,12 +51,21 @@ type pollState struct {
 
 func (pollState) TableName() string { return "listening_poll_state" }
 
+// learnedProfile is the single-row AI-distilled summary of the user's habits.
+type learnedProfile struct {
+	ID          uint `gorm:"primaryKey"`
+	Summary     string
+	GeneratedAt time.Time
+}
+
+func (learnedProfile) TableName() string { return "learned_profile" }
+
 // Store persists play events, the genre cache, and the poll cursor.
 type Store struct{ db *gorm.DB }
 
 // New migrates the listening tables and returns a store.
 func New(db *gorm.DB) (*Store, error) {
-	if err := db.AutoMigrate(&PlayEvent{}, &artistGenres{}, &pollState{}); err != nil {
+	if err := db.AutoMigrate(&PlayEvent{}, &artistGenres{}, &pollState{}, &learnedProfile{}); err != nil {
 		return nil, fmt.Errorf("migrate listening tables: %w", err)
 	}
 	return &Store{db: db}, nil
@@ -228,6 +237,71 @@ func (s *Store) ProfileJSON(partOfDay string, weekend *bool, weather string, day
 		return "", err
 	}
 	return string(data), nil
+}
+
+// --- learned profile (AI distillation) --------------------------------------
+
+// TotalPlays is the number of recorded play events, used to gate analysis.
+func (s *Store) TotalPlays() int {
+	var n int64
+	s.db.Model(&PlayEvent{}).Count(&n)
+	return int(n)
+}
+
+// LearnedProfile returns the current distilled summary, or "" when none exists.
+func (s *Store) LearnedProfile() string {
+	var lp learnedProfile
+	if err := s.db.First(&lp, 1).Error; err != nil {
+		return ""
+	}
+	return lp.Summary
+}
+
+// ProfileGeneratedAt returns when the learned profile was last written (zero if
+// never), so the analyzer can avoid redundant re-runs across restarts.
+func (s *Store) ProfileGeneratedAt() time.Time {
+	var lp learnedProfile
+	if err := s.db.First(&lp, 1).Error; err != nil {
+		return time.Time{}
+	}
+	return lp.GeneratedAt
+}
+
+// SetLearnedProfile replaces the distilled summary.
+func (s *Store) SetLearnedProfile(summary string) {
+	s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, UpdateAll: true}).
+		Create(&learnedProfile{ID: 1, Summary: summary, GeneratedAt: time.Now().UTC()})
+}
+
+// distinctWeathers lists the weather conditions present in the data.
+func (s *Store) distinctWeathers() []string {
+	var ws []string
+	s.db.Model(&PlayEvent{}).Where("weather <> ''").Distinct().Pluck("weather", &ws)
+	return ws
+}
+
+// AnalysisInput assembles the aggregated data the model distils into a learned
+// profile: overall, weekday vs weekend, a recent-14-day window (for trend), and
+// per-weather genre breakdowns. Returned as JSON.
+func (s *Store) AnalysisInput() string {
+	weekday, weekend := false, true
+	data := map[string]any{
+		"overall":    s.Profile(Filter{}),
+		"weekday":    s.Profile(Filter{Weekend: &weekday}),
+		"weekend":    s.Profile(Filter{Weekend: &weekend}),
+		"recent_14d": s.Profile(Filter{Days: 14}),
+	}
+	byWeather := map[string][]Count{}
+	for _, w := range s.distinctWeathers() {
+		if g := s.topGenres(Filter{Weather: w}, 6); len(g) > 0 {
+			byWeather[w] = g
+		}
+	}
+	if len(byWeather) > 0 {
+		data["top_genres_by_weather"] = byWeather
+	}
+	b, _ := json.Marshal(data)
+	return string(b)
 }
 
 func (f Filter) describe() map[string]any {

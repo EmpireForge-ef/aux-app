@@ -118,6 +118,18 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		slog.Info("listening profile enabled", "poll_interval", cfg.Listening.PollInterval)
 	}
 
+	// The analyzer periodically distils the listening data into a "learned
+	// profile" the AI reads each turn. It resolves the agent lazily so it always
+	// uses the current (hot-swappable) credentials.
+	if cfg.Profile.AnalysisEnabled {
+		s.analyzer = listening.NewAnalyzer(lstore, func(ctx context.Context, data string) (string, error) {
+			_, agent := s.clients()
+			return agent.Analyze(ctx, data)
+		}, cfg.Profile.AnalysisInterval)
+		go s.analyzer.Run(ctx)
+		slog.Info("profile analysis enabled", "interval", cfg.Profile.AnalysisInterval)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("POST /api/admin/login", s.handleAdminLogin)
@@ -128,6 +140,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 	mux.HandleFunc("GET /api/admin/settings", s.requireAuth(s.handleGetSettings))
 	mux.HandleFunc("PUT /api/admin/settings", s.requireAuth(s.handleUpdateSettings))
 	mux.HandleFunc("GET /api/admin/models", s.requireAuth(s.handleListModels))
+	mux.HandleFunc("POST /api/admin/analyze-profile", s.requireAuth(s.handleAnalyzeProfile))
 	mux.HandleFunc("GET /api/auth/login", s.requireAuth(s.handleLogin))
 	// The OAuth callback is reached via a redirect from Spotify; the state
 	// value minted at /api/auth/login (which is auth-gated) validates it.
@@ -199,6 +212,7 @@ type server struct {
 	history       *history.Store
 	plcache       *playlistcache.Store
 	listening     *listening.Store
+	analyzer      *listening.Analyzer // nil when profile analysis is disabled
 	adminSessions *sessionStore
 	oidc          *oidcauth.Authenticator // nil when OIDC is not configured
 

@@ -74,7 +74,7 @@ containerSecurityContext:
 secrets:
   # Name of an existing Secret with keys:
   #   AUX_ADMIN_PASSWORD, AUX_SPOTIFY_CLIENT_ID, AUX_SPOTIFY_CLIENT_SECRET,
-  #   AUX_ANTHROPIC_API_KEY, AUX_OIDC_CLIENT_SECRET
+  #   AUX_ANTHROPIC_API_KEY, AUX_OIDC_CLIENT_SECRET, AUX_DATABASE_URL
   existingSecret: ""
   # Or set the values here and the chart creates the Secret itself.
   # adminPassword protects the whole app. It may be left empty ONLY when OIDC
@@ -86,8 +86,15 @@ secrets:
   spotifyClientSecret: ""
   anthropicApiKey: ""
   oidcClientSecret: ""  # OIDC client secret (only if oidc.enabled)
+  # PostgreSQL connection string — REQUIRED. Aux stores all its data (chats,
+  # settings, preferences, history, …) in PostgreSQL. Point this at your own
+  # database, e.g.
+  #   postgres://user:password@postgres.default.svc:5432/aux?sslmode=disable
+  databaseUrl: ""
 
-# Persists /data (the saved Spotify OAuth token) across pod restarts.
+# Persists /data across pod restarts. Application data lives in PostgreSQL now;
+# /data only holds the Spotify OAuth token file (and is where a one-time import
+# of any pre-database JSON would be read from).
 persistence:
   enabled: true
   size: 16Mi

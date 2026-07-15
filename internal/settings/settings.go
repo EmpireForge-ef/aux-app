@@ -1,6 +1,8 @@
 // Package settings persists runtime-changeable credentials (Spotify app
-// credentials, Anthropic API key) so they can be managed from the admin UI
-// instead of the environment.
+// credentials, Anthropic API key) and preferences (model, timezone) so they can
+// be managed from the admin UI instead of the environment. Backed by a
+// single-row PostgreSQL table via GORM; the values are cached in memory for the
+// hot read path.
 package settings
 
 import (
@@ -9,6 +11,9 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Values are the settings the admin can change at runtime. Values set here
@@ -25,26 +30,33 @@ type Values struct {
 	Timezone string `json:"timezone,omitempty"`
 }
 
-// Store loads and saves Values on disk. The file is created with 0600 since
-// it holds secrets.
+// record is the single-row GORM model holding the settings blob.
+type record struct {
+	ID     uint   `gorm:"primaryKey"`
+	Values Values `gorm:"serializer:json;type:jsonb"`
+}
+
+func (record) TableName() string { return "settings" }
+
+// Store loads and saves Values in PostgreSQL, caching them in memory.
 type Store struct {
-	path string
+	db *gorm.DB
 
 	mu     sync.RWMutex
 	values Values
 }
 
-// Load opens (or initialises) the store at path.
-func Load(path string) (*Store, error) {
-	s := &Store{path: path}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return s, nil
-		}
+// New migrates the settings table and loads the current values.
+func New(db *gorm.DB) (*Store, error) {
+	if err := db.AutoMigrate(&record{}); err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(data, &s.values); err != nil {
+	s := &Store{db: db}
+	var r record
+	err := db.First(&r, 1).Error
+	if err == nil {
+		s.values = r.Values
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 	return s, nil
@@ -79,19 +91,41 @@ func (s *Store) Update(v Values) (Values, error) {
 	if v.Timezone != "" {
 		s.values.Timezone = strings.TrimSpace(v.Timezone)
 	}
-	data, err := json.MarshalIndent(s.values, "", "  ")
-	if err != nil {
-		return Values{}, err
-	}
-	if err := os.WriteFile(s.path, data, 0o600); err != nil {
+	if err := s.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "id"}},
+		UpdateAll: true,
+	}).Create(&record{ID: 1, Values: s.values}).Error; err != nil {
 		return Values{}, err
 	}
 	return s.values, nil
 }
 
-// Mask abbreviates a secret for display: the last four characters stay
-// visible for recognition, everything else is blurred. Empty input stays
-// empty (meaning "not set").
+// ImportFile loads pre-database settings from a JSON file, but only when no
+// settings row exists yet (so it never clobbers live data).
+func (s *Store) ImportFile(path string) error {
+	var total int64
+	s.db.Model(&record{}).Count(&total)
+	if total > 0 {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var v Values
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	_, err = s.Update(v)
+	return err
+}
+
+// Mask abbreviates a secret for display: the last four characters stay visible
+// for recognition, everything else is blurred. Empty input stays empty
+// (meaning "not set").
 func Mask(secret string) string {
 	if secret == "" {
 		return ""

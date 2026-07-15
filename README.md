@@ -42,6 +42,9 @@ artists, and control playback.
   without a restart.
 - **Model selection** — fetch the current list of models from the Anthropic
   API and pick one (plus a max-tokens cap) to trade quality for cost.
+- **PostgreSQL-backed** — all data (chats, settings, preferences, history, temp
+  playlists, playlist cache) is stored in PostgreSQL via GORM, with the schema
+  defined in Go and migrated automatically on startup.
 - **Deploy-ready** — non-root container, GitHub Actions with versioned GHCR
   publishing, and a hardened Helm chart.
 
@@ -55,7 +58,13 @@ artists, and control playback.
   stream to the browser as server-sent events, including live tool-call
   activity. Destructive tools (removing saved items, clearing/removing
   playlist items, unfollowing) are gated behind a user confirmation before
-  they run.
+  they run. Requests use Anthropic prompt caching, and long chats are
+  auto-summarised so they never exceed the model's context window.
+- **Storage** (PostgreSQL via GORM): chats (with the full message history and
+  transcript as JSONB), admin settings, preferences, recent-track history,
+  temp playlists, and the playlist cache are all persisted to PostgreSQL. The
+  schema is created (and migrated) automatically on startup, and any
+  pre-database JSON files are imported once.
 - **Frontend** (Vite + TypeScript): a chat UI with a "Connect Spotify"
   button, streaming responses, and a sidebar of persistent conversations —
   start new chats and come back to old ones; the full context (including
@@ -70,6 +79,9 @@ artists, and control playback.
   `localhost` is rejected. For local development register
   `http://127.0.0.1:8080/api/auth/callback`.
 - An [Anthropic API key](https://platform.claude.com/).
+- A **PostgreSQL** database (14+). All application data — chats, settings,
+  preferences, history, temp playlists, and the playlist cache — is stored
+  there via GORM. Point `AUX_DATABASE_URL` at it.
 - Spotify Premium for the playback-control tools (everything else works
   without it).
 
@@ -127,9 +139,14 @@ of precedence. Each setting lists its environment variable, the equivalent
   max output tokens per model turn. Also settable in the admin UI.
 - **`AUX_ANTHROPIC_CONTEXT_LIMIT`** (`anthropic.context_limit`, default
   `200000`) — the model's usable input-context size in tokens. As a chat's
-  history approaches it, Aux summarises the older turns so requests keep fitting
-  (see "Long conversations" below). Raise it if your model/tier allows a larger
-  window.
+  history approaches it, Aux summarises the older turns so requests keep fitting.
+  Raise it if your model/tier allows a larger window.
+
+**Database**
+
+- **`AUX_DATABASE_URL`** (`database_url`) — **required.** PostgreSQL connection
+  string, e.g. `postgres://user:pass@host:5432/aux?sslmode=disable`. All
+  application data lives here; the schema is created automatically on startup.
 
 **Admin login**
 
@@ -146,26 +163,29 @@ of precedence. Each setting lists its environment variable, the equivalent
 - **`AUX_OIDC_ALLOWED_EMAILS`** (`oidc.allowed_emails`) — comma-separated
   allowlist of verified emails; empty means any authenticated user is allowed.
 
-**Storage** (persist these on a volume in production)
+**Storage**
 
 - **`AUX_TOKEN_FILE`** (`token_file`, default `spotify-token.json`) — where
-  the Spotify OAuth token is persisted.
+  the Spotify OAuth token is persisted. This is the one file still kept on disk
+  (persist it on a volume in production); everything else lives in PostgreSQL.
+
+The paths below are only read once, to import pre-database JSON data on first
+startup (a store imports only when its table is empty, so it's a no-op on fresh
+installs and subsequent starts). New data is written to PostgreSQL, not these
+files.
+
 - **`AUX_SETTINGS_FILE`** (`settings_file`, default `aux-settings.json`) —
-  where credentials and model choice set via the admin UI are persisted
-  (mode 0600).
-- **`AUX_CHATS_DIR`** (`chats_dir`, default `chats`) — directory of persisted
-  conversations (one JSON file per chat).
+  legacy admin settings to import.
+- **`AUX_CHATS_DIR`** (`chats_dir`, default `chats`) — legacy conversations to
+  import (one JSON file per chat).
 - **`AUX_PREFERENCES_FILE`** (`preferences_file`, default
-  `aux-preferences.json`) — where the user's saved music preferences (the AI's
-  cross-chat memory) are persisted.
+  `aux-preferences.json`) — legacy saved preferences to import.
 - **`AUX_TEMP_PLAYLISTS_FILE`** (`temp_playlists_file`, default
-  `aux-temp-playlists.json`) — tracks the throwaway "queue" playlists the AI
-  creates, whose edits skip the confirmation prompt.
-- **`AUX_HISTORY_FILE`** (`history_file`, default `aux-history.json`) — remembers
-  recently queued/added tracks so the AI stops recommending the same songs.
+  `aux-temp-playlists.json`) — legacy temp-playlist IDs to import.
+- **`AUX_HISTORY_FILE`** (`history_file`, default `aux-history.json`) — legacy
+  recent-track history to import.
 - **`AUX_PLAYLIST_CACHE_FILE`** (`playlist_cache_file`, default
-  `aux-playlist-cache.json`) — caches playlist contents (keyed by snapshot) so
-  the AI can skip duplicates on add without re-fetching the whole playlist.
+  `aux-playlist-cache.json`) — legacy playlist cache to import.
 - **`AUX_TIMEZONE`** (`timezone`, default empty = server local) — an IANA name
   such as `Europe/Berlin` for the clock the AI is given each turn. Can also be
   set from the settings UI.
@@ -245,15 +265,22 @@ docker run -p 8080:8080 -v aux-data:/data \
   -e AUX_SPOTIFY_CLIENT_ID=... \
   -e AUX_SPOTIFY_CLIENT_SECRET=... \
   -e AUX_ANTHROPIC_API_KEY=... \
+  -e AUX_DATABASE_URL=postgres://user:pass@host:5432/aux?sslmode=disable \
   -e AUX_PUBLIC_URL=http://127.0.0.1:8080 \
   ghcr.io/empireforge-ef/aux-app:latest
 ```
+
+`AUX_DATABASE_URL` must point at a reachable PostgreSQL instance (the schema is
+created automatically). For local development, `docker compose` a Postgres
+alongside the app, or run one with
+`docker run -e POSTGRES_PASSWORD=aux -e POSTGRES_DB=aux -p 5432:5432 postgres:17`.
 
 ## CI / releases
 
 CI runs on **GitHub Actions** (`.github/workflows/ci.yml`); pipelines are
 visible under the repository's **Actions** tab. Every push and pull request
-runs gofmt, `go vet`, `go test`, the frontend build, and a Helm lint.
+runs gofmt, `go vet`, `go test` (against a PostgreSQL service container so the
+database-backed store tests run), the frontend build, and a Helm lint.
 
 Pushing a `vX.Y.Z` tag additionally publishes to the GitHub Container
 Registry (GHCR):
@@ -282,11 +309,14 @@ helm install aux oci://ghcr.io/empireforge-ef/charts/aux --version X.Y.Z \
   --set secrets.adminPassword=... \
   --set secrets.spotifyClientId=... \
   --set secrets.spotifyClientSecret=... \
-  --set secrets.anthropicApiKey=...
+  --set secrets.anthropicApiKey=... \
+  --set secrets.databaseUrl=postgres://user:pass@postgres:5432/aux?sslmode=disable
 ```
 
-The chart persists `/data` (the saved Spotify token, admin settings and
-chats) in a small PVC so state survives restarts; set `secrets.existingSecret`
+Aux needs a **PostgreSQL** database; the chart does not bundle one, so point
+`secrets.databaseUrl` (or the `AUX_DATABASE_URL` key of `secrets.existingSecret`)
+at your own instance. The chart persists `/data` (just the saved Spotify token)
+in a small PVC so state survives restarts; set `secrets.existingSecret`
 to manage credentials outside the chart. It runs the pod with a hardened
 `securityContext` (non-root UID 10001, read-only root filesystem, all
 capabilities dropped, `RuntimeDefault` seccomp) — override via

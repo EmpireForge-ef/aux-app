@@ -25,7 +25,7 @@
             ]);
           };
           # Recompute with `nix build .#backend` whenever go.sum changes.
-          vendorHash = "sha256-BMyBFR7pwI5i0iB4wpQVio4L+r80deY5fbq5E5cz758=";
+          vendorHash = "sha256-l6m/We2P7ZQwizfi4SC9a5FBUlyeGnK94x9QGyE0GXA=";
           subPackages = [ "cmd/server" ];
           meta.mainProgram = "server";
         };

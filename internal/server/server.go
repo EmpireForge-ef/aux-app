@@ -17,6 +17,7 @@ import (
 	"github.com/EmpireForge-ef/aux-app/internal/ai"
 	"github.com/EmpireForge-ef/aux-app/internal/chat"
 	"github.com/EmpireForge-ef/aux-app/internal/config"
+	"github.com/EmpireForge-ef/aux-app/internal/db"
 	"github.com/EmpireForge-ef/aux-app/internal/history"
 	"github.com/EmpireForge-ef/aux-app/internal/oidcauth"
 	"github.com/EmpireForge-ef/aux-app/internal/playlistcache"
@@ -33,30 +34,36 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 		log.Printf("warning: %s", warn)
 	}
 
-	store, err := settings.Load(cfg.SettingsFile)
+	gdb, err := db.Open(cfg.DatabaseURL)
 	if err != nil {
-		return fmt.Errorf("load settings file %s: %w", cfg.SettingsFile, err)
+		return fmt.Errorf("open database: %w", err)
 	}
-	chats, err := chat.NewStore(cfg.ChatsDir)
+
+	store, err := settings.New(gdb)
 	if err != nil {
-		return fmt.Errorf("open chats dir %s: %w", cfg.ChatsDir, err)
+		return fmt.Errorf("init settings: %w", err)
 	}
-	prefs, err := preferences.Load(cfg.PreferencesFile)
+	chats, err := chat.NewStore(gdb)
 	if err != nil {
-		return fmt.Errorf("load preferences %s: %w", cfg.PreferencesFile, err)
+		return fmt.Errorf("init chats: %w", err)
 	}
-	temps, err := tempplaylists.Load(cfg.TempPlaylists)
+	prefs, err := preferences.New(gdb)
 	if err != nil {
-		return fmt.Errorf("load temp playlists %s: %w", cfg.TempPlaylists, err)
+		return fmt.Errorf("init preferences: %w", err)
 	}
-	hist, err := history.Load(cfg.HistoryFile)
+	temps, err := tempplaylists.New(gdb)
 	if err != nil {
-		return fmt.Errorf("load history %s: %w", cfg.HistoryFile, err)
+		return fmt.Errorf("init temp playlists: %w", err)
 	}
-	plcache, err := playlistcache.Load(cfg.PlaylistCache)
+	hist, err := history.New(gdb)
 	if err != nil {
-		return fmt.Errorf("load playlist cache %s: %w", cfg.PlaylistCache, err)
+		return fmt.Errorf("init history: %w", err)
 	}
+	plcache, err := playlistcache.New(gdb)
+	if err != nil {
+		return fmt.Errorf("init playlist cache: %w", err)
+	}
+	importLegacyJSON(cfg, store, chats, prefs, temps, hist, plcache)
 
 	s := &server{
 		cfg:           cfg,
@@ -297,6 +304,41 @@ func (s *server) clients() (*spotify.Manager, *ai.Agent) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.spotify, s.agent
+}
+
+// importLegacyJSON does a best-effort, one-time import of any pre-database JSON
+// data from the configured file paths. Each store imports only when its table
+// is still empty, so this is a no-op on subsequent starts and on fresh
+// installs. Failures are logged, never fatal.
+func importLegacyJSON(cfg *config.Config, store *settings.Store, chats *chat.Store, prefs *preferences.Store, temps *tempplaylists.Store, hist *history.Store, plcache *playlistcache.Store) {
+	if err := store.ImportFile(cfg.SettingsFile); err != nil {
+		log.Printf("legacy settings import: %v", err)
+	}
+	if n, err := chats.ImportDir(cfg.ChatsDir); err != nil {
+		log.Printf("legacy chats import: %v", err)
+	} else if n > 0 {
+		log.Printf("imported %d legacy chat(s) from %s", n, cfg.ChatsDir)
+	}
+	if n, err := prefs.ImportFile(cfg.PreferencesFile); err != nil {
+		log.Printf("legacy preferences import: %v", err)
+	} else if n > 0 {
+		log.Printf("imported %d legacy preference(s)", n)
+	}
+	if n, err := temps.ImportFile(cfg.TempPlaylists); err != nil {
+		log.Printf("legacy temp-playlists import: %v", err)
+	} else if n > 0 {
+		log.Printf("imported %d legacy temp playlist(s)", n)
+	}
+	if n, err := hist.ImportFile(cfg.HistoryFile); err != nil {
+		log.Printf("legacy history import: %v", err)
+	} else if n > 0 {
+		log.Printf("imported %d legacy history entr(ies)", n)
+	}
+	if n, err := plcache.ImportFile(cfg.PlaylistCache); err != nil {
+		log.Printf("legacy playlist-cache import: %v", err)
+	} else if n > 0 {
+		log.Printf("imported %d legacy playlist-cache entr(ies)", n)
+	}
 }
 
 // splitAndTrim splits a comma-separated list, dropping empty entries.

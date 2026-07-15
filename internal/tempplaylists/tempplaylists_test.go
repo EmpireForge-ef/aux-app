@@ -1,36 +1,37 @@
 package tempplaylists
 
 import (
-	"path/filepath"
 	"testing"
+
+	"github.com/EmpireForge-ef/aux-app/internal/dbtest"
 )
 
-func TestTempPlaylistsRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "temp.json")
-	s, err := Load(path)
+func newStore(t *testing.T) *Store {
+	gdb := dbtest.Open(t)
+	s, err := New(gdb)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("new: %v", err)
 	}
+	dbtest.Truncate(t, gdb, "temp_playlists")
+	return s
+}
+
+func TestAddHasRemove(t *testing.T) {
+	s := newStore(t)
 	if s.Has("p1") {
-		t.Error("empty store should not contain anything")
+		t.Error("p1 should not be present yet")
 	}
 	s.Add("p1")
 	s.Add("p1") // idempotent
-	s.Add("p2")
-
-	// Reload from disk to confirm persistence.
-	s2, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
+	if !s.Has("p1") {
+		t.Error("p1 should be present")
 	}
-	if !s2.Has("p1") || !s2.Has("p2") {
-		t.Error("added ids should persist")
+	s.Remove("p1")
+	if s.Has("p1") {
+		t.Error("p1 should be removed")
 	}
-	s2.Remove("p1")
-	if s2.Has("p1") {
-		t.Error("removed id should be gone")
-	}
-	if !s2.Has("p2") {
-		t.Error("p2 should remain")
+	s.Add("")
+	if s.Has("") {
+		t.Error("empty id should be ignored")
 	}
 }

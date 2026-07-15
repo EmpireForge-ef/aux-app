@@ -1,33 +1,50 @@
 package history
 
 import (
-	"path/filepath"
 	"testing"
+
+	"github.com/EmpireForge-ef/aux-app/internal/dbtest"
 )
 
-func TestHistoryRecencyDedupPersist(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "hist.json")
-	s, _ := Load(path)
-	s.Add([]string{"a", "b"})
-	s.Add([]string{"c"})
-	s.Add([]string{"a"}) // re-adding 'a' moves it to most-recent
-
-	// Reload to confirm persistence.
-	s2, err := Load(path)
+func newStore(t *testing.T) *Store {
+	gdb := dbtest.Open(t)
+	s, err := New(gdb)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("new: %v", err)
 	}
-	got := s2.Recent(10) // newest first
-	want := []string{"a", "c", "b"}
+	dbtest.Truncate(t, gdb, "history_entries")
+	return s
+}
+
+func TestAddRecencyAndDedup(t *testing.T) {
+	s := newStore(t)
+	s.Add([]string{"a", "b", "c"})
+	s.Add([]string{"b"}) // b moves to the most-recent end
+
+	got := s.Recent(10)
+	want := []string{"b", "c", "a"} // newest first
 	if len(got) != len(want) {
-		t.Fatalf("recent = %v, want %v", got, want)
+		t.Fatalf("Recent = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("recent[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
+			t.Fatalf("Recent = %v, want %v", got, want)
 		}
 	}
-	if r := s2.Recent(1); len(r) != 1 || r[0] != "a" {
-		t.Errorf("Recent(1) = %v, want [a]", r)
+	// Recent(n) limits.
+	if two := s.Recent(2); len(two) != 2 || two[0] != "b" {
+		t.Errorf("Recent(2) = %v", two)
+	}
+}
+
+func TestTrimToCap(t *testing.T) {
+	s := newStore(t)
+	batch := make([]string, maxEntries+50)
+	for i := range batch {
+		batch[i] = "u" + string(rune('0'+i%10)) + string(rune('a'+i/10%26)) + string(rune('A'+i/260))
+	}
+	s.Add(batch)
+	if got := len(s.Recent(0)); got > maxEntries {
+		t.Errorf("kept %d entries, want <= %d", got, maxEntries)
 	}
 }

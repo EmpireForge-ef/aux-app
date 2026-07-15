@@ -61,10 +61,15 @@ func (o OIDC) Enabled() bool {
 }
 
 type Config struct {
-	Addr            string `mapstructure:"addr"`
-	StaticDir       string `mapstructure:"static_dir"`
-	PublicURL       string `mapstructure:"public_url"`
-	TokenFile       string `mapstructure:"token_file"`
+	Addr      string `mapstructure:"addr"`
+	StaticDir string `mapstructure:"static_dir"`
+	PublicURL string `mapstructure:"public_url"`
+	TokenFile string `mapstructure:"token_file"`
+	// DatabaseURL is the PostgreSQL connection string, e.g.
+	// postgres://user:pass@host:5432/aux?sslmode=disable. Required.
+	DatabaseURL string `mapstructure:"database_url"`
+	// The *File / *Dir paths below are only used for the one-time import of
+	// pre-database JSON data on first startup; new data lives in PostgreSQL.
 	SettingsFile    string `mapstructure:"settings_file"`
 	ChatsDir        string `mapstructure:"chats_dir"`
 	PreferencesFile string `mapstructure:"preferences_file"`
@@ -93,6 +98,7 @@ func New(cfgFile string, flags *pflag.FlagSet) (*Config, error) {
 	// IP for local development, HTTPS everywhere else.
 	v.SetDefault("public_url", "http://127.0.0.1:8080")
 	v.SetDefault("token_file", "spotify-token.json")
+	v.SetDefault("database_url", "")
 	v.SetDefault("settings_file", "aux-settings.json")
 	v.SetDefault("chats_dir", "chats")
 	v.SetDefault("preferences_file", "aux-preferences.json")

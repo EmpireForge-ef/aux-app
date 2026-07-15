@@ -3,7 +3,7 @@ name: aux
 description: Aux — AI-driven Spotify control with a web frontend
 type: application
 # version/appVersion are overridden by CI at publish time (--version/--app-version).
-version: 0.2.2
-appVersion: "0.2.2"
+version: 0.3.0
+appVersion: "0.3.0"
 sources:
   - https://github.com/EmpireForge-ef/spotify-go-wrapper

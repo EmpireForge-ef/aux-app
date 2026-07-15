@@ -61,6 +61,23 @@ func (o OIDC) Enabled() bool {
 	return o.IssuerURL != "" && o.ClientID != ""
 }
 
+// Log configures the structured logger.
+type Log struct {
+	// Format is "text" (default) or "json".
+	Format string `mapstructure:"format"`
+	// Level is debug|info|warn|error (default info).
+	Level string `mapstructure:"level"`
+}
+
+// Profile configures the periodic AI distillation of the listening data into a
+// durable "learned profile".
+type Profile struct {
+	// AnalysisEnabled turns the scheduled distillation on (default true).
+	AnalysisEnabled bool `mapstructure:"analysis_enabled"`
+	// AnalysisInterval is how often it runs (default 168h = weekly).
+	AnalysisInterval time.Duration `mapstructure:"analysis_interval"`
+}
+
 // Listening configures the passive listening-profile collector.
 type Listening struct {
 	// Enabled turns the background poller on (default true). It no-ops until
@@ -99,6 +116,8 @@ type Config struct {
 	Admin     Admin     `mapstructure:"admin"`
 	OIDC      OIDC      `mapstructure:"oidc"`
 	Listening Listening `mapstructure:"listening"`
+	Profile   Profile   `mapstructure:"profile"`
+	Log       Log       `mapstructure:"log"`
 }
 
 // New builds a viper instance with defaults, env bindings, and an optional
@@ -124,6 +143,10 @@ func New(cfgFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("location", "")
 	v.SetDefault("listening.enabled", true)
 	v.SetDefault("listening.poll_interval", "20m")
+	v.SetDefault("profile.analysis_enabled", true)
+	v.SetDefault("profile.analysis_interval", "168h")
+	v.SetDefault("log.format", "text")
+	v.SetDefault("log.level", "info")
 	v.SetDefault("admin.password", "")
 	v.SetDefault("anthropic.model", "claude-opus-4-8")
 	v.SetDefault("anthropic.max_tokens", 8192)

@@ -5,13 +5,13 @@ package db
 
 import (
 	"fmt"
-	"log"
-	"os"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/EmpireForge-ef/aux-app/internal/logging"
 )
 
 // Open connects to PostgreSQL via GORM using a libpq DSN or URL, e.g.
@@ -22,9 +22,10 @@ func Open(dsn string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("no database URL configured — set AUX_DATABASE_URL to a PostgreSQL connection string")
 	}
 	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		// Warn on real problems, but "record not found" is normal control flow
-		// here (cache misses, first-run cursor lookups), so don't log it.
-		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
+		// Route GORM through slog. Warn on real problems, but "record not found"
+		// is normal control flow here (cache misses, first-run cursor lookups),
+		// so don't log it.
+		Logger: logger.New(logging.GormWriter{}, logger.Config{
 			LogLevel:                  logger.Warn,
 			IgnoreRecordNotFoundError: true,
 		}),

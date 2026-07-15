@@ -2,7 +2,7 @@ package listening
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -41,7 +41,7 @@ func (p *Poller) Run(ctx context.Context) {
 			return
 		case <-timer.C:
 			if err := p.pollOnce(ctx); err != nil {
-				log.Printf("listening poll: %v", err)
+				slog.Warn("listening poll failed", "err", err)
 			}
 			timer.Reset(p.interval)
 		}
@@ -73,7 +73,7 @@ func (p *Poller) pollOnce(ctx context.Context) error {
 	var wx *weather.Weather
 	if loc := p.location(); loc != "" {
 		if w, werr := p.weather.Current(ctx, loc); werr != nil {
-			log.Printf("weather fetch: %v", werr)
+			slog.Warn("weather fetch failed", "err", werr)
 		} else {
 			wx = w
 		}
@@ -120,7 +120,7 @@ func (p *Poller) pollOnce(ctx context.Context) error {
 		p.store.SetLastPlayedAt(newest)
 	}
 	if inserted > 0 {
-		log.Printf("listening: recorded %d new play(s)", inserted)
+		slog.Info("recorded plays", "count", inserted)
 	}
 	return nil
 }
@@ -146,7 +146,7 @@ func (p *Poller) resolveGenres(ctx context.Context, client *spotify.Client, even
 			list = append(list, id)
 		}
 		if artists, err := client.GetArtists(ctx, list...); err != nil {
-			log.Printf("genre lookup: %v", err)
+			slog.Warn("genre lookup failed", "err", err)
 		} else {
 			for _, a := range artists {
 				if a != nil {

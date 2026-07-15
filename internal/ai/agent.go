@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -384,8 +384,9 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 		}
 
 		u := msg.Usage
-		log.Printf("anthropic usage: input=%d cache_write=%d cache_read=%d output=%d",
-			u.InputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens, u.OutputTokens)
+		slog.Debug("anthropic usage",
+			"input", u.InputTokens, "cache_write", u.CacheCreationInputTokens,
+			"cache_read", u.CacheReadInputTokens, "output", u.OutputTokens)
 
 		messages = append(messages, msg.ToParam())
 
@@ -453,7 +454,7 @@ func (a *Agent) Chat(ctx context.Context, history []anthropic.MessageParam, text
 			out, err := a.runTool(ctx, tu.Name, tu.Input, sp)
 			success := err == nil
 			if err != nil {
-				log.Printf("tool %s failed: %v (input: %s)", tu.Name, err, tu.Input)
+				slog.Warn("tool failed", "tool", tu.Name, "err", err, "input", string(tu.Input))
 				out = "Error: " + err.Error()
 			}
 			emit(Event{Type: "tool_result", Name: tu.Name, OK: &success, Summary: summarize(out)})
@@ -656,7 +657,7 @@ func (a *Agent) compact(ctx context.Context, messages []anthropic.MessageParam, 
 
 	summary, err := a.summarizeMessages(ctx, messages[:cut])
 	if err != nil || summary == "" {
-		log.Printf("compaction summary failed: %v", err)
+		slog.Warn("compaction summary failed", "err", err)
 		return messages
 	}
 

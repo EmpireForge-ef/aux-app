@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,7 +35,7 @@ import (
 // fails.
 func Run(ctx context.Context, cfg *config.Config, version string) error {
 	if warn := redirectURLWarning(cfg.Spotify.RedirectURL); warn != "" {
-		log.Printf("warning: %s", warn)
+		slog.Warn(warn)
 	}
 
 	gdb, err := db.Open(cfg.DatabaseURL)
@@ -96,14 +96,14 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 			Scopes:        strings.Fields(cfg.OIDC.Scopes),
 			AllowedEmails: splitAndTrim(cfg.OIDC.AllowedEmails),
 		})
-		log.Printf("OIDC login enabled (issuer %s)", cfg.OIDC.IssuerURL)
+		slog.Info("OIDC login enabled", "issuer", cfg.OIDC.IssuerURL)
 	}
 	s.rebuildClients()
 	if s.authDisabled() {
-		log.Printf("warning: no login method configured — the app runs UNPROTECTED (set AUX_ADMIN_PASSWORD or AUX_OIDC_* before going live)")
+		slog.Warn("no login method configured — the app runs UNPROTECTED; set AUX_ADMIN_PASSWORD or AUX_OIDC_* before going live")
 	}
 	if id, _, _ := s.effectiveCredentials(); id == "" {
-		log.Printf("warning: no Spotify client ID configured — set it via AUX_SPOTIFY_CLIENT_ID or the admin settings UI")
+		slog.Warn("no Spotify client ID configured — set it via AUX_SPOTIFY_CLIENT_ID or the admin settings UI")
 	}
 
 	// The listening poller records recent plays in the background to build the
@@ -115,7 +115,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 			s.effectiveLocation, s.turnLocation,
 		)
 		go poller.Run(ctx)
-		log.Printf("listening profile enabled (poll every %s)", cfg.Listening.PollInterval)
+		slog.Info("listening profile enabled", "poll_interval", cfg.Listening.PollInterval)
 	}
 
 	mux := http.NewServeMux()
@@ -153,7 +153,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("aux %s listening on %s (static: %s)", version, cfg.Addr, cfg.StaticDir)
+		slog.Info("server started", "version", version, "addr", cfg.Addr, "static_dir", cfg.StaticDir)
 		errCh <- srv.ListenAndServe()
 	}()
 
@@ -291,7 +291,7 @@ func (s *server) turnLocation() *time.Location {
 	}
 	loc, err := time.LoadLocation(name)
 	if err != nil {
-		log.Printf("warning: invalid timezone %q, falling back to server local: %v", name, err)
+		slog.Warn("invalid timezone, falling back to server local", "timezone", name, "err", err)
 		return nil
 	}
 	return loc
@@ -321,7 +321,7 @@ func (s *server) rebuildClients() {
 
 	mgr := spotify.NewManager(id, secret, s.cfg.Spotify.RedirectURL, s.cfg.TokenFile)
 	if err := mgr.LoadPersisted(); err != nil {
-		log.Printf("warning: could not restore spotify token: %v", err)
+		slog.Warn("could not restore spotify token", "err", err)
 	}
 	agent := ai.New(key, model, maxTokens, s.cfg.Anthropic.ContextLimit)
 
@@ -343,32 +343,32 @@ func (s *server) clients() (*spotify.Manager, *ai.Agent) {
 // installs. Failures are logged, never fatal.
 func importLegacyJSON(cfg *config.Config, store *settings.Store, chats *chat.Store, prefs *preferences.Store, temps *tempplaylists.Store, hist *history.Store, plcache *playlistcache.Store) {
 	if err := store.ImportFile(cfg.SettingsFile); err != nil {
-		log.Printf("legacy settings import: %v", err)
+		slog.Warn("legacy settings import failed", "err", err)
 	}
 	if n, err := chats.ImportDir(cfg.ChatsDir); err != nil {
-		log.Printf("legacy chats import: %v", err)
+		slog.Warn("legacy chats import failed", "err", err)
 	} else if n > 0 {
-		log.Printf("imported %d legacy chat(s) from %s", n, cfg.ChatsDir)
+		slog.Info("imported legacy chats", "count", n, "dir", cfg.ChatsDir)
 	}
 	if n, err := prefs.ImportFile(cfg.PreferencesFile); err != nil {
-		log.Printf("legacy preferences import: %v", err)
+		slog.Warn("legacy preferences import failed", "err", err)
 	} else if n > 0 {
-		log.Printf("imported %d legacy preference(s)", n)
+		slog.Info("imported legacy preferences", "count", n)
 	}
 	if n, err := temps.ImportFile(cfg.TempPlaylists); err != nil {
-		log.Printf("legacy temp-playlists import: %v", err)
+		slog.Warn("legacy temp-playlists import failed", "err", err)
 	} else if n > 0 {
-		log.Printf("imported %d legacy temp playlist(s)", n)
+		slog.Info("imported legacy temp playlists", "count", n)
 	}
 	if n, err := hist.ImportFile(cfg.HistoryFile); err != nil {
-		log.Printf("legacy history import: %v", err)
+		slog.Warn("legacy history import failed", "err", err)
 	} else if n > 0 {
-		log.Printf("imported %d legacy history entr(ies)", n)
+		slog.Info("imported legacy history entries", "count", n)
 	}
 	if n, err := plcache.ImportFile(cfg.PlaylistCache); err != nil {
-		log.Printf("legacy playlist-cache import: %v", err)
+		slog.Warn("legacy playlist-cache import failed", "err", err)
 	} else if n > 0 {
-		log.Printf("imported %d legacy playlist-cache entr(ies)", n)
+		slog.Info("imported legacy playlist-cache entries", "count", n)
 	}
 }
 
@@ -411,7 +411,7 @@ func (s *server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	mgr, _ := s.clients()
 	if err := mgr.HandleCallback(r.Context(), q.Get("code"), q.Get("state")); err != nil {
-		log.Printf("spotify callback failed: %v", err)
+		slog.Warn("spotify callback failed", "err", err)
 		http.Redirect(w, r, "/?auth_error=callback_failed", http.StatusFound)
 		return
 	}

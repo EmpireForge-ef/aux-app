@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/EmpireForge-ef/aux-app/internal/config"
+	"github.com/EmpireForge-ef/aux-app/internal/logging"
 	"github.com/EmpireForge-ef/aux-app/internal/server"
 )
 
@@ -46,6 +47,7 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			logging.Setup(cfg.Log.Format, cfg.Log.Level)
 			return server.Run(cmd.Context(), cfg, version)
 		},
 	}

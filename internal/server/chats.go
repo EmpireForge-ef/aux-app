@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -340,7 +340,7 @@ func (s *server) runTurn(ctx context.Context, chatID, message string, rn *run) {
 			flushText()
 			emit(ai.Event{Type: "done", StopReason: "stopped"})
 		} else {
-			log.Printf("chat error (chat %s): %v", chatID, chatErr)
+			slog.Error("chat turn failed", "chat", chatID, "err", chatErr)
 			emit(ai.Event{Type: "error", Message: chatErr.Error()})
 		}
 	}
@@ -348,7 +348,7 @@ func (s *server) runTurn(ctx context.Context, chatID, message string, rn *run) {
 
 	c.Messages = messages
 	if err := s.chats.Save(c); err != nil {
-		log.Printf("persist chat %s failed: %v", chatID, err)
+		slog.Error("persist chat failed", "chat", chatID, "err", err)
 		emit(ai.Event{Type: "error", Message: "saving the conversation failed: " + err.Error()})
 	}
 }

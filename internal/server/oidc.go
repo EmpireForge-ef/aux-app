@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -54,7 +54,7 @@ func (s *server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	url, err := s.oidc.AuthCodeURL(r.Context(), state, nonce)
 	if err != nil {
-		log.Printf("oidc login: %v", err)
+		slog.Warn("oidc login failed", "err", err)
 		http.Redirect(w, r, "/?login_error=oidc_unavailable", http.StatusFound)
 		return
 	}
@@ -78,7 +78,7 @@ func (s *server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if e := r.URL.Query().Get("error"); e != "" {
-		log.Printf("oidc callback: provider returned error %q", e)
+		slog.Warn("oidc callback: provider returned error", "error", e)
 		http.Redirect(w, r, "/?login_error=oidc_denied", http.StatusFound)
 		return
 	}
@@ -99,12 +99,12 @@ func (s *server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	identity, err := s.oidc.Verify(ctx, r.URL.Query().Get("code"), nonceCookie.Value)
 	if err != nil {
-		log.Printf("oidc callback: verification failed: %v", err)
+		slog.Warn("oidc callback verification failed", "err", err)
 		http.Redirect(w, r, "/?login_error=oidc_verify", http.StatusFound)
 		return
 	}
 	if !s.oidc.Allowed(identity) {
-		log.Printf("oidc callback: %s (%s) is not on the allowlist", identity.Email, identity.Subject)
+		slog.Warn("oidc login rejected: not on allowlist", "email", identity.Email, "subject", identity.Subject)
 		http.Redirect(w, r, "/?login_error=oidc_forbidden", http.StatusFound)
 		return
 	}
@@ -113,6 +113,6 @@ func (s *server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	log.Printf("oidc login: %s signed in", identity.DisplayName())
+	slog.Info("oidc login", "user", identity.DisplayName())
 	http.Redirect(w, r, "/", http.StatusFound)
 }

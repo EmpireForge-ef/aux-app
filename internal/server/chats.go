@@ -324,6 +324,8 @@ func (s *server) runTurn(ctx context.Context, chatID, message string, rn *run) {
 	// through the context.
 	turnCtx := aitools.WithTempPlaylists(ctx, s.temps)
 	turnCtx = aitools.WithPlaylistCache(turnCtx, s.plcache)
+	turnCtx = aitools.WithWeekdayQueues(turnCtx, s.temps)
+	turnCtx = aitools.WithLocalNow(turnCtx, now)
 	messages, chatErr := agent.Chat(turnCtx, c.Messages, message, sp, emit, ai.TurnOptions{
 		Confirm:        confirm,
 		Memory:         s.prefs,

@@ -15,6 +15,12 @@ artists, and control playback.
   a tool the model can call; responses stream live, including tool activity.
   Tool results are slimmed to the essentials (name, artist, uri, …) to stay
   fast and token-cheap. Destructive actions ask for your confirmation first.
+- **Editable weekday queues** — "play me some songs" doesn't spawn a new
+  playlist every time. The AI uses one reusable queue playlist per weekday
+  (`Aux Queue · Monday`, …) that it can freely edit (Spotify's real queue
+  can't be reordered or cleared), auto-cleared once a week — so you keep about
+  a week to move favourites into your own playlists. Ask for a named, dedicated
+  playlist and it still makes a real one.
 - **Personalised & context-aware** — the AI keeps a small cross-chat memory of
   your music preferences (favourite genres, no-gos, era), remembers the tracks
   it recently queued so it doesn't recommend the same songs over and over, and

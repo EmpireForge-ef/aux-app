@@ -3,22 +3,32 @@ package aitools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"time"
 
 	spotify "github.com/EmpireForge-ef/spotify-go-wrapper"
 )
 
-// TempPlaylists tracks playlists the AI created as throwaway, editable
-// "queues". Edits to a tracked temp playlist skip the confirmation gate.
+// TempPlaylists tracks playlists the AI treats as throwaway, editable "queues"
+// (the weekday queues). Edits to a tracked queue skip the confirmation gate.
 type TempPlaylists interface {
 	Add(id string)
 	Has(id string) bool
 	Remove(id string)
 }
 
-type tempKey struct{}
+// WeekdayQueues stores the reusable per-weekday queue playlists.
+type WeekdayQueues interface {
+	WeekdayQueue(weekday int) (playlistID, lastUsed string, ok bool)
+	SetWeekdayQueue(weekday int, playlistID, name, lastUsed string)
+	MarkWeekdayUsed(weekday int, lastUsed string)
+}
 
-// WithTempPlaylists attaches the temp-playlist registry to a context so tool
-// handlers can register/forget temp playlists.
+type tempKey struct{}
+type weekdayKey struct{}
+type nowKey struct{}
+
+// WithTempPlaylists attaches the temp-playlist registry to a context.
 func WithTempPlaylists(ctx context.Context, tp TempPlaylists) context.Context {
 	return context.WithValue(ctx, tempKey{}, tp)
 }
@@ -28,57 +38,99 @@ func tempFromContext(ctx context.Context) TempPlaylists {
 	return tp
 }
 
+// WithWeekdayQueues attaches the weekday-queue store to a context.
+func WithWeekdayQueues(ctx context.Context, wq WeekdayQueues) context.Context {
+	return context.WithValue(ctx, weekdayKey{}, wq)
+}
+
+func weekdayFromContext(ctx context.Context) WeekdayQueues {
+	wq, _ := ctx.Value(weekdayKey{}).(WeekdayQueues)
+	return wq
+}
+
+// WithLocalNow attaches the current local time (in the user's timezone), used
+// to pick and reset the weekday queue.
+func WithLocalNow(ctx context.Context, t time.Time) context.Context {
+	return context.WithValue(ctx, nowKey{}, t)
+}
+
+func localNow(ctx context.Context) time.Time {
+	if t, ok := ctx.Value(nowKey{}).(time.Time); ok && !t.IsZero() {
+		return t
+	}
+	return time.Now()
+}
+
 func tempTools() []Tool {
 	return []Tool{
 		{
-			Name:        "create_temp_playlist",
-			Description: "Create a throwaway playlist to use as an editable queue. Spotify's real queue cannot be reordered, cleared, or have items removed once added, so when the user wants a queue they can change, create a temp playlist here, add tracks to it, and play it (play with context_uri = the returned uri). Edits to a temp playlist (replace_playlist_items, remove_playlist_items) do NOT prompt the user for confirmation. Reuse the temp playlist you created earlier in the conversation instead of making a new one each time; delete it with delete_temp_playlist when done.",
-			Schema: schema(map[string]any{
-				"name": str("Optional name for the temp playlist. Defaults to 'Aux Queue'."),
-			}),
+			Name:        "get_daily_queue",
+			Description: "Get today's reusable queue playlist. There is one per weekday ('Aux Queue · Monday', etc.); the app automatically clears it the first time it's used in a new week, so the user keeps roughly a week to save favourites into their own playlists before they're cleared. Use this whenever the user wants to play or queue songs, build a listening session, or a queue they can edit — do NOT create new playlists for that (they pile up). Add tracks with add_items_to_playlist and play it with play(context_uri = the returned uri). Removing/replacing items in it needs no confirmation since it's a queue. Only use create_playlist for a dedicated, named playlist the user explicitly asks to keep.",
+			Schema:      schema(map[string]any{}),
 			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					Name string `json:"name"`
-				}](input)
-				if err != nil {
-					return nil, err
+				wq := weekdayFromContext(ctx)
+				if wq == nil {
+					return nil, errors.New("weekday queues are unavailable")
 				}
-				name := args.Name
-				if name == "" {
-					name = "Aux Queue"
+				now := localNow(ctx)
+				weekday := int(now.Weekday())
+				today := now.Format("2006-01-02")
+				name := "Aux Queue · " + now.Weekday().String()
+				desc := "Weekly editable queue by Aux — cleared each new " + now.Weekday().String() + "."
+
+				id, lastUsed, ok := wq.WeekdayQueue(weekday)
+				var uri string
+				needCreate := !ok
+				if ok {
+					// Confirm it still exists (the user may have deleted it).
+					if pl, err := c.GetPlaylist(ctx, id, spotify.Fields("id,uri,name")); err != nil {
+						needCreate = true
+					} else {
+						uri, name = pl.URI, pl.Name
+					}
 				}
-				pl, err := c.CreatePlaylist(ctx, spotify.PlaylistDetails{
-					Name:        name,
-					Public:      spotify.Ptr(false),
-					Description: "Temporary editable queue created by Aux.",
-				})
-				if err != nil {
-					return nil, err
+
+				create := func() error {
+					pl, err := c.CreatePlaylist(ctx, spotify.PlaylistDetails{
+						Name:        name,
+						Public:      spotify.Ptr(false),
+						Description: desc,
+					})
+					if err != nil {
+						return err
+					}
+					id, uri = pl.ID, pl.URI
+					wq.SetWeekdayQueue(weekday, id, name, today)
+					return nil
 				}
+
+				wasReset := false
+				switch {
+				case needCreate:
+					if err := create(); err != nil {
+						return nil, err
+					}
+				case lastUsed != today:
+					// First use this week for this weekday — clear last week's songs.
+					if _, err := c.ReplacePlaylistItems(ctx, id); err != nil {
+						if err := create(); err != nil { // playlist gone — recreate
+							return nil, err
+						}
+					} else {
+						wq.MarkWeekdayUsed(weekday, today)
+					}
+					wasReset = true
+				}
+
+				// Register it so queue edits (remove/replace items) skip the
+				// confirmation gate.
 				if tp := tempFromContext(ctx); tp != nil {
-					tp.Add(pl.ID)
+					tp.Add(id)
 				}
-				return map[string]any{"id": pl.ID, "uri": pl.URI, "name": pl.Name, "temp": true}, nil
-			},
-		},
-		{
-			Name:        "delete_temp_playlist",
-			Description: "Delete a temp playlist created with create_temp_playlist (unfollows it, which removes it for the user). No confirmation is asked since it is a throwaway playlist.",
-			Schema:      schema(map[string]any{"id": str("The Spotify ID of the temp playlist to delete.")}, "id"),
-			Handler: func(ctx context.Context, c *spotify.Client, input json.RawMessage) (any, error) {
-				args, err := decode[struct {
-					ID string `json:"id"`
-				}](input)
-				if err != nil {
-					return nil, err
-				}
-				if err := c.UnfollowPlaylist(ctx, args.ID); err != nil {
-					return nil, err
-				}
-				if tp := tempFromContext(ctx); tp != nil {
-					tp.Remove(args.ID)
-				}
-				return ok(), nil
+				return map[string]any{
+					"id": id, "uri": uri, "name": name,
+					"weekday": now.Weekday().String(), "was_reset": wasReset,
+				}, nil
 			},
 		},
 	}
@@ -107,14 +159,16 @@ func AddedTrackURIs(name string, input json.RawMessage) []string {
 	return nil
 }
 
-// IsTempPlaylistEdit reports whether a destructive tool call targets a tracked
-// temp playlist, in which case the confirmation gate can be skipped.
+// IsTempPlaylistEdit reports whether a destructive tool call edits a tracked
+// queue playlist, in which case the confirmation gate is skipped. Only item
+// edits qualify — deleting (unfollowing) a queue still asks, since the weekday
+// queues are persistent.
 func IsTempPlaylistEdit(tp TempPlaylists, name string, input json.RawMessage) bool {
 	if tp == nil {
 		return false
 	}
 	switch name {
-	case "remove_playlist_items", "replace_playlist_items", "unfollow_playlist":
+	case "remove_playlist_items", "replace_playlist_items":
 	default:
 		return false
 	}

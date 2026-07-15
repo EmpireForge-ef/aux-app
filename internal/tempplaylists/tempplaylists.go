@@ -25,15 +25,48 @@ type temp struct {
 
 func (temp) TableName() string { return "temp_playlists" }
 
+// weekdayQueue is the reusable queue playlist for one weekday (0=Sunday). The
+// AI adds songs to it and the app clears it the first time it's used in a new
+// week, giving the user a rolling week to save favourites.
+type weekdayQueue struct {
+	Weekday    int `gorm:"primaryKey"` // 0=Sunday … 6=Saturday
+	PlaylistID string
+	Name       string
+	LastUsed   string // local date YYYY-MM-DD of the last time it was used
+}
+
+func (weekdayQueue) TableName() string { return "weekday_queues" }
+
 // Store is an ordered set of temp-playlist IDs in PostgreSQL.
 type Store struct{ db *gorm.DB }
 
 // New migrates the temp-playlists table and returns a store.
 func New(db *gorm.DB) (*Store, error) {
-	if err := db.AutoMigrate(&temp{}); err != nil {
+	if err := db.AutoMigrate(&temp{}, &weekdayQueue{}); err != nil {
 		return nil, fmt.Errorf("migrate temp playlists: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+// WeekdayQueue returns the stored queue playlist for a weekday (0=Sunday), and
+// the local date it was last used.
+func (s *Store) WeekdayQueue(weekday int) (playlistID, lastUsed string, ok bool) {
+	var q weekdayQueue
+	if err := s.db.First(&q, "weekday = ?", weekday).Error; err != nil {
+		return "", "", false
+	}
+	return q.PlaylistID, q.LastUsed, true
+}
+
+// SetWeekdayQueue records (or replaces) the queue playlist for a weekday.
+func (s *Store) SetWeekdayQueue(weekday int, playlistID, name, lastUsed string) {
+	s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "weekday"}}, UpdateAll: true}).
+		Create(&weekdayQueue{Weekday: weekday, PlaylistID: playlistID, Name: name, LastUsed: lastUsed})
+}
+
+// MarkWeekdayUsed updates the last-used date for a weekday's queue.
+func (s *Store) MarkWeekdayUsed(weekday int, lastUsed string) {
+	s.db.Model(&weekdayQueue{}).Where("weekday = ?", weekday).Update("last_used", lastUsed)
 }
 
 // Add records a temp-playlist ID (no-op if already present) and trims the

@@ -16,9 +16,9 @@ func TestIsTempPlaylistEdit(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"replace_playlist_items", `{"id":"temp1","uris":[]}`, true},   // temp -> skip confirm
-		{"remove_playlist_items", `{"id":"temp1"}`, true},              // temp -> skip
-		{"unfollow_playlist", `{"id":"temp1"}`, true},                  // temp -> skip
+		{"replace_playlist_items", `{"id":"temp1","uris":[]}`, true},   // queue edit -> skip confirm
+		{"remove_playlist_items", `{"id":"temp1"}`, true},              // queue edit -> skip
+		{"unfollow_playlist", `{"id":"temp1"}`, false},                 // deleting a queue still confirms
 		{"replace_playlist_items", `{"id":"real99","uris":[]}`, false}, // real -> confirm
 		{"remove_saved_tracks", `{"ids":["x"]}`, false},                // library op -> confirm
 	}
